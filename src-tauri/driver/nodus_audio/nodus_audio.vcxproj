@@ -33,6 +33,10 @@
     <SpectreMitigation>false</SpectreMitigation>
     <!-- Don't sign during the build — CI signs the .sys/.cat separately with a test cert. -->
     <SignMode>Off</SignMode>
+    <!-- Skip the in-build Inf2Cat/catalog step: it runs with empty Configuration/Platform
+         and packages only the .inf (not the .sys), so inf2cat fails. CI generates and
+         signs the catalog separately in the Test-sign step. -->
+    <EnableInf2Cat>false</EnableInf2Cat>
     <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
   </PropertyGroup>

@@ -98,7 +98,7 @@ jobs:
           # SetupBuildEnv.cmd configures WDKContentRoot/PATH in the *current* cmd,
           # so msbuild (and signtool/inf2cat) resolve from the EWDK afterwards.
           $proj = Join-Path $env:DRIVER_DIR $env:PROJECT
-          $cmd = "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && msbuild `"$proj`" /p:Configuration=$env:CONFIG /p:Platform=$env:PLATFORM /p:WindowsTargetPlatformVersion=$kitVer /m"
+          $cmd = "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && msbuild `"$proj`" /p:Configuration=$env:CONFIG /p:Platform=$env:PLATFORM /p:WindowsTargetPlatformVersion=$kitVer /p:EnableInf2Cat=false /m"
           cmd.exe /c $cmd
           if ($LASTEXITCODE -ne 0) { Write-Error "Driver build failed ($LASTEXITCODE)"; exit 1 }
 
