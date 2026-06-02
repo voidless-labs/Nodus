@@ -14,7 +14,11 @@ name: Build Nodus Virtual Audio Driver
 #   The EWDK ISO download is gated by Microsoft and its URL changes per release, so it
 #   cannot be hard-coded. Set a repository variable EWDK_ISO_URL pointing to the EWDK ISO
 #   (Settings → Secrets and variables → Actions → Variables → New variable), or pass it
-#   via the workflow_dispatch input below.
+#   via the workflow_dispatch input below. A Microsoft fwlink (go.microsoft.com/fwlink/...)
+#   works directly — Invoke-WebRequest follows the 302 redirect.
+#
+#   NOTE: the EWDK ISO is large (~19 GB). It exceeds the 10 GB Actions cache limit, so it
+#   is downloaded fresh each run (no caching). It fits on the runner's D: workspace drive.
 
 on:
   workflow_dispatch:
@@ -54,25 +58,18 @@ jobs:
             exit 1
           }
           "url=$url" >> $env:GITHUB_OUTPUT
-          # Stable cache key from the URL so reruns reuse the downloaded ISO.
-          $hash = [System.BitConverter]::ToString(
-            [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-              [System.Text.Encoding]::UTF8.GetBytes($url))).Replace("-","").Substring(0,16)
-          "cachekey=$hash" >> $env:GITHUB_OUTPUT
-
-      - name: Cache EWDK ISO
-        id: cache-ewdk
-        uses: actions/cache@v4
-        with:
-          path: ewdk.iso
-          key: ewdk-iso-${{ steps.ewdk.outputs.cachekey }}
 
       - name: Download EWDK ISO
-        if: steps.cache-ewdk.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading EWDK ISO (this is several GB)..."
-          Invoke-WebRequest -Uri "${{ steps.ewdk.outputs.url }}" -OutFile ewdk.iso -UseBasicParsing
+          # ~19 GB — too large for the Actions cache (10 GB limit), so fetch fresh each run.
+          # Download to the D: workspace drive, which has room; C: may be too small.
+          Write-Host "Free space before download:"
+          Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -in 'C','D' } |
+            Format-Table Name,@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
+          Write-Host "Downloading EWDK ISO (~19 GB, follows redirects)..."
+          $ProgressPreference = 'SilentlyContinue'  # huge speedup for large IWR downloads
+          Invoke-WebRequest -Uri "${{ steps.ewdk.outputs.url }}" -OutFile ewdk.iso -UseBasicParsing -MaximumRedirection 5
           $size = (Get-Item ewdk.iso).Length
           Write-Host "Downloaded $([math]::Round($size/1GB,2)) GB"
           if ($size -lt 1GB) { Write-Error "ISO looks too small — check the URL."; exit 1 }
