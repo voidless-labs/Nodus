@@ -84,34 +84,21 @@ jobs:
           Write-Host "EWDK mounted at $drive"
           "drive=$drive" >> $env:GITHUB_OUTPUT
 
-          # The .vcxproj imports WindowsDriver.Default.props / .targets via
-          # "$(WDKContentRoot)build\...". Newer WDKs (this EWDK = build 28000) put these
-          # under a versioned subfolder (build\<ver>\...), so the unversioned path fails.
-          # Locate the real files on the mounted EWDK and patch the imports to absolute paths.
-          $kits = Join-Path $drive "Program Files\Windows Kits"
-          $props   = Get-ChildItem $kits -Recurse -Filter WindowsDriver.Default.props -ErrorAction SilentlyContinue | Select-Object -First 1
-          $targets = Get-ChildItem $kits -Recurse -Filter WindowsDriver.targets       -ErrorAction SilentlyContinue | Select-Object -First 1
-          Write-Host "WindowsDriver.Default.props -> $($props.FullName)"
-          Write-Host "WindowsDriver.targets       -> $($targets.FullName)"
-          if (-not $props -or -not $targets) {
-            Write-Host "Available WindowsDriver.* files:"
-            Get-ChildItem $kits -Recurse -Filter "WindowsDriver.*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
-            Write-Error "Could not locate WDK driver MSBuild props/targets on the EWDK."
-            exit 1
-          }
-
-          $proj = Join-Path $env:DRIVER_DIR $env:PROJECT
-          $xml = Get-Content $proj -Raw
-          # In -replace the replacement string treats '$' specially but '\' is literal;
-          # Windows paths have no '$', so pass them as-is.
-          $xml = $xml -replace [regex]::Escape('$(WDKContentRoot)build\WindowsDriver.Default.props'), $props.FullName
-          $xml = $xml -replace [regex]::Escape('$(WDKContentRoot)build\WindowsDriver.targets'),      $targets.FullName
-          Set-Content $proj $xml -Encoding UTF8
-          Write-Host "Patched imports in $proj"
+          # Detect the WDK kit version bundled in the EWDK (build\<ver>\) so we can pin
+          # WindowsTargetPlatformVersion. The project uses the standard C++ driver toolset
+          # (PlatformToolset=WindowsKernelModeDriver10.0), which pulls in the WDK props/targets
+          # automatically — no manual import patching needed.
+          $buildDir = Join-Path $drive "Program Files\Windows Kits\10\build"
+          $kitVer = (Get-ChildItem $buildDir -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+                     Sort-Object Name -Descending | Select-Object -First 1).Name
+          if (-not $kitVer) { Write-Error "Could not detect WDK kit version under $buildDir"; exit 1 }
+          Write-Host "WDK kit version: $kitVer"
 
           # SetupBuildEnv.cmd configures WDKContentRoot/PATH in the *current* cmd,
           # so msbuild (and signtool/inf2cat) resolve from the EWDK afterwards.
-          $cmd = "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && msbuild `"$proj`" /p:Configuration=$env:CONFIG /p:Platform=$env:PLATFORM /m"
+          $proj = Join-Path $env:DRIVER_DIR $env:PROJECT
+          $cmd = "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && msbuild `"$proj`" /p:Configuration=$env:CONFIG /p:Platform=$env:PLATFORM /p:WindowsTargetPlatformVersion=$kitVer /m"
           cmd.exe /c $cmd
           if ($LASTEXITCODE -ne 0) { Write-Error "Driver build failed ($LASTEXITCODE)"; exit 1 }
 
