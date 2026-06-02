@@ -17,7 +17,7 @@ CMiniportWaveRTStream::CMiniportWaveRTStream(PUNKNOWN pUnknownOuter)
 CMiniportWaveRTStream::~CMiniportWaveRTStream()
 {
     SetState(KSSTATE_STOP);
-    FreeBuffer();
+    FreeAudioBuffer(m_pMdl, m_waveBufferSize);
 }
 
 NTSTATUS CMiniportWaveRTStream::NonDelegatingQueryInterface(REFIID riid, PVOID* ppvObject)
@@ -113,11 +113,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetPosition(PKSAUDIO_POSITION pPo
 // AllocateBuffer — audiodg asks us for the WaveRT cyclic buffer.
 // We allocate non-paged pool and return an MDL so audiodg can map it.
 // ---------------------------------------------------------------------------
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::AllocateBuffer(
+STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::AllocateAudioBuffer(
     ULONG RequestedSize, PMDL* pMdl,
     PULONG pActualSize, PULONG pOffsetFromFirstPage,
     MEMORY_CACHING_TYPE* pCacheType)
 {
+    UNREFERENCED_PARAMETER(RequestedSize);
     if (m_pWaveBuffer) return STATUS_ALREADY_COMMITTED;
 
     ULONG size = NODUS_WAVE_BYTES;  // Ignore request, use our fixed size
@@ -142,26 +143,24 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::AllocateBuffer(
     return STATUS_SUCCESS;
 }
 
-STDMETHODIMP_(void) CMiniportWaveRTStream::FreeBuffer()
+STDMETHODIMP_(void) CMiniportWaveRTStream::FreeAudioBuffer(PMDL pMdl, ULONG BufferSize)
 {
+    // We own and track the buffer/MDL ourselves; the passed handles refer to the
+    // same allocation returned by AllocateAudioBuffer.
+    UNREFERENCED_PARAMETER(pMdl);
+    UNREFERENCED_PARAMETER(BufferSize);
     if (m_pMdl)        { IoFreeMdl(m_pMdl);                          m_pMdl = nullptr; }
     if (m_pWaveBuffer) { ExFreePoolWithTag(m_pWaveBuffer, NODUS_POOL_TAG); m_pWaveBuffer = nullptr; }
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetBuffer(
-    PMDL* pMdl, PULONG pOffset, MEMORY_CACHING_TYPE* pCacheType)
+// Report zero hardware latency — this is a virtual endpoint with no real DMA FIFO.
+STDMETHODIMP_(void) CMiniportWaveRTStream::GetHWLatency(PKSRTAUDIO_HWLATENCY pLatency)
 {
-    if (!m_pMdl) return STATUS_UNSUCCESSFUL;
-    *pMdl      = m_pMdl;
-    *pOffset   = 0;
-    *pCacheType = MmCached;
-    return STATUS_SUCCESS;
-}
-
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRTStream::GetBufferSize(PULONG pSize)
-{
-    *pSize = m_waveBufferSize;
-    return STATUS_SUCCESS;
+    if (pLatency) {
+        pLatency->FifoSize     = 0;
+        pLatency->ChipsetDelay = 0;
+        pLatency->CodecDelay   = 0;
+    }
 }
 
 // Position and clock registers: not supported — audiodg falls back to GetPosition().

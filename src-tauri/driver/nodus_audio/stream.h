@@ -19,22 +19,20 @@ public:
 
     NTSTATUS Init(NODUS_RING_BUFFER* pShared, PKSDATAFORMAT pFormat);
 
-    // IUnknown
-    NTSTATUS NonDelegatingQueryInterface(REFIID riid, PVOID* ppvObject);
+    // IUnknown — NonDelegatingQueryInterface is declared by DECLARE_STD_UNKNOWN();
+    // we only provide the body in the .cpp.
 
-    // IMiniportWaveRTStream
+    // IMiniportWaveRTStream (signatures must match km/portcls.h exactly)
     STDMETHODIMP_(NTSTATUS) SetFormat(PKSDATAFORMAT DataFormat);
     STDMETHODIMP_(NTSTATUS) SetState(KSSTATE State);
     STDMETHODIMP_(NTSTATUS) GetPosition(PKSAUDIO_POSITION pPosition);
-    STDMETHODIMP_(NTSTATUS) AllocateBuffer(ULONG RequestedSize,
-                                            PMDL* pMdl,
-                                            PULONG pActualSize,
-                                            PULONG pOffsetFromFirstPage,
-                                            MEMORY_CACHING_TYPE* pCacheType);
-    STDMETHODIMP_(void)     FreeBuffer();
-    STDMETHODIMP_(NTSTATUS) GetBuffer(PMDL* pMdl, PULONG pOffsetFromFirstPage,
-                                       MEMORY_CACHING_TYPE* pCacheType);
-    STDMETHODIMP_(NTSTATUS) GetBufferSize(PULONG pBufferSize);
+    STDMETHODIMP_(NTSTATUS) AllocateAudioBuffer(ULONG RequestedSize,
+                                                PMDL* pMdl,
+                                                PULONG pActualSize,
+                                                PULONG pOffsetFromFirstPage,
+                                                MEMORY_CACHING_TYPE* pCacheType);
+    STDMETHODIMP_(void)     FreeAudioBuffer(PMDL pMdl, ULONG BufferSize);
+    STDMETHODIMP_(void)     GetHWLatency(PKSRTAUDIO_HWLATENCY pLatency);
     STDMETHODIMP_(NTSTATUS) GetPositionRegister(PKSRTAUDIO_HWREGISTER pReg);
     STDMETHODIMP_(NTSTATUS) GetClockRegister(PKSRTAUDIO_HWREGISTER pReg);
 

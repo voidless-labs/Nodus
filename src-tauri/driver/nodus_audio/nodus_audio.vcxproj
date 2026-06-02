@@ -31,6 +31,8 @@
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <!-- Avoid requiring Spectre-mitigated runtime libs that may be absent in CI. -->
     <SpectreMitigation>false</SpectreMitigation>
+    <!-- Don't sign during the build — CI signs the .sys/.cat separately with a test cert. -->
+    <SignMode>Off</SignMode>
     <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
   </PropertyGroup>
@@ -46,7 +48,11 @@
       <!-- PortCls requires C++ exceptions and RTTI disabled in kernel mode. -->
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The kernel toolset already defines _KERNEL_MODE (redefining = C4117), so we
+           do not add it here. stdunk.h emits a deprecation warning (operator new/delete)
+           that has no warning code to suppress, so don't treat warnings as errors for
+           this MVP driver build. -->
+      <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
       <!-- Audio kernel libraries -->

@@ -31,7 +31,7 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     // Create our miniport
     CMiniportWaveRT* pMiniport =
-        new(NonPagedPool, NODUS_POOL_TAG) CMiniportWaveRT(nullptr);
+        new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(nullptr);
     if (!pMiniport) {
         pPort->Release();
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -63,8 +63,8 @@ extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject,
 {
     return PcAddAdapterDevice(DriverObject, PhysicalDeviceObject,
                               StartDevice,
-                              MAX_MINIPORTS,  // max subdevices
-                              0);             // device flags
+                              1,    // max subdevices (one "Wave" render endpoint)
+                              0);   // device extension size
 }
 
 // ---------------------------------------------------------------------------

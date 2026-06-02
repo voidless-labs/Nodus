@@ -26,9 +26,11 @@ static PKSDATARANGE gDataRangePtr[] = { (PKSDATARANGE)&gDataRange };
 
 static PCPIN_DESCRIPTOR gPinDescriptors[] = {
     {   // Pin 0 — render sink (apps connect here)
-        1, 1,                               // InstanceCount: min=1 max=1
+        1,                                  // MaxGlobalInstanceCount
+        1,                                  // MaxFilterInstanceCount
+        1,                                  // MinFilterInstanceCount
         nullptr,                            // AutomationTable
-        {
+        {                                   // KSPIN_DESCRIPTOR
             0, nullptr,                     // no interfaces
             0, nullptr,                     // no mediums
             ARRAYSIZE(gDataRangePtr), gDataRangePtr,
@@ -41,12 +43,18 @@ static PCPIN_DESCRIPTOR gPinDescriptors[] = {
 };
 
 static PCFILTER_DESCRIPTOR gFilterDescriptor = {
-    0, nullptr,                             // Version, AutomationTable
-    sizeof(PCPIN_DESCRIPTOR),
-    ARRAYSIZE(gPinDescriptors), gPinDescriptors,
-    0, nullptr,                             // nodes
-    0, nullptr,                             // connections
-    0, nullptr                              // categories
+    0,                                      // Version
+    nullptr,                                // AutomationTable
+    sizeof(PCPIN_DESCRIPTOR),               // PinSize
+    ARRAYSIZE(gPinDescriptors),             // PinCount
+    gPinDescriptors,                        // Pins
+    0,                                      // NodeSize
+    0,                                      // NodeCount
+    nullptr,                                // Nodes
+    0,                                      // ConnectionCount
+    nullptr,                                // Connections
+    0,                                      // CategoryCount
+    nullptr                                 // Categories
 };
 
 // ---------------------------------------------------------------------------
@@ -110,16 +118,15 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(
 // IMiniportWaveRT::NewStream
 // ---------------------------------------------------------------------------
 STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
-    PMINIPORTWAVERTSTREAM* pStream, PUNKNOWN pOuterUnknown,
-    POOL_TYPE poolType, ULONG Pin, BOOLEAN Capture,
-    PKSDATAFORMAT DataFormat, PDRMRIGHTS DrmRights)
+    PMINIPORTWAVERTSTREAM* OutStream, PPORTWAVERTSTREAM OuterUnknown,
+    ULONG Pin, BOOLEAN Capture, PKSDATAFORMAT DataFormat)
 {
+    UNREFERENCED_PARAMETER(OuterUnknown);
     UNREFERENCED_PARAMETER(Pin);
     UNREFERENCED_PARAMETER(Capture);
-    UNREFERENCED_PARAMETER(DrmRights);
 
     CMiniportWaveRTStream* pNew =
-        new(poolType, NODUS_POOL_TAG) CMiniportWaveRTStream(pOuterUnknown);
+        new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRTStream(nullptr);
     if (!pNew) return STATUS_INSUFFICIENT_RESOURCES;
 
     NTSTATUS status = pNew->Init(m_pShared, DataFormat);
@@ -128,8 +135,8 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
         return status;
     }
 
-    *pStream = (PMINIPORTWAVERTSTREAM)pNew;
-    (*pStream)->AddRef();
+    *OutStream = (PMINIPORTWAVERTSTREAM)pNew;
+    (*OutStream)->AddRef();
     return STATUS_SUCCESS;
 }
 

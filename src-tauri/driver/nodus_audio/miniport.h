@@ -23,8 +23,8 @@ public:
 
     ~CMiniportWaveRT();
 
-    // IUnknown (via CUnknown)
-    NTSTATUS NonDelegatingQueryInterface(REFIID riid, PVOID* ppvObject);
+    // IUnknown — NonDelegatingQueryInterface is declared by DECLARE_STD_UNKNOWN();
+    // we only provide the body in the .cpp.
 
     // IMiniport
     STDMETHODIMP_(NTSTATUS) GetDescription(PPCFILTER_DESCRIPTOR* ppDesc);
@@ -35,11 +35,10 @@ public:
     // IMiniportWaveRT
     STDMETHODIMP_(NTSTATUS) Init(PUNKNOWN UnknownAdapter, PRESOURCELIST ResourceList,
                                   PPORTWAVERT Port);
-    STDMETHODIMP_(NTSTATUS) NewStream(PMINIPORTWAVERTSTREAM* pStream,
-                                      PUNKNOWN pOuterUnknown, POOL_TYPE poolType,
+    STDMETHODIMP_(NTSTATUS) NewStream(PMINIPORTWAVERTSTREAM* OutStream,
+                                      PPORTWAVERTSTREAM OuterUnknown,
                                       ULONG Pin, BOOLEAN Capture,
-                                      PKSDATAFORMAT DataFormat,
-                                      PDRMRIGHTS DrmRights);
+                                      PKSDATAFORMAT DataFormat);
     STDMETHODIMP_(NTSTATUS) GetDeviceDescription(PDEVICE_DESCRIPTION pDevDesc);
 
     // Shared memory accessor for the stream
