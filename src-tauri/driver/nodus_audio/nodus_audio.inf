@@ -66,10 +66,10 @@ HKR,,FriendlyName,,%WaveDesc%
 NodusAudio_CopyFiles = 12          ; \Windows\System32\drivers
 
 [SourceDisksNames]
-1 = %DiskName%,,,""
+1 = %DiskName%
 
 [SourceDisksFiles]
-nodus_audio.sys = 1,,
+nodus_audio.sys = 1
 
 ; ============================================================
 [Strings]
