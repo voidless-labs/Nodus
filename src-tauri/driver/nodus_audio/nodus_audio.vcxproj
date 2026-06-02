@@ -55,8 +55,9 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
-      <!-- Audio kernel libraries -->
-      <AdditionalDependencies>portcls.lib;ks.lib;ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Audio kernel libraries. stdunk.lib provides the CUnknown base-class
+           implementation (constructor/destructor + NonDelegating* methods). -->
+      <AdditionalDependencies>portcls.lib;stdunk.lib;ks.lib;ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>

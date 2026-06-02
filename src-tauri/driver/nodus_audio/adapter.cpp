@@ -1,3 +1,7 @@
+// INITGUID must be defined in exactly ONE translation unit before the headers
+// that declare the PortCls/KS GUIDs, so DEFINE_GUID emits their definitions
+// (otherwise CLSID_PortWaveRT / IID_IMiniport* are unresolved at link time).
+#define INITGUID
 #include <portcls.h>
 #include <stdunk.h>
 #include "miniport.h"
