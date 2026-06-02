@@ -24,18 +24,21 @@ use tracing::{debug, info, warn};
 use super::graph::{ActiveRoute, Graph, RoutingGraph};
 use crate::audio::{
     session::{
-        clamp_volume, find_device_for_exe, volume_to_atomic, AppSessionControl, AudioFrame,
-        AudioRenderer, LoopbackCapture, SessionError,
+        clamp_volume, find_audio_pid_for_exe, volume_to_atomic, AudioFrame, AudioRenderer,
+        LoopbackCapture, ProcessLoopbackCapture, SessionError,
     },
     virtual_capture::VirtualCapture,
     wasapi::AudioFormat,
 };
 use tokio::sync::broadcast;
 
-/// A capture source feeding one device's broadcast channel. Either a WASAPI
-/// loopback/input capture, or the Nodus kernel driver's shared ring buffer.
+/// A capture source feeding one source's broadcast channel:
+///   - Loopback: whole-device WASAPI loopback / input capture (device sources)
+///   - ProcessLoopback: isolated per-app capture by PID (app sources)
+///   - Virtual: the Nodus kernel driver's shared ring buffer (virtual sources)
 enum CaptureSource {
     Loopback(LoopbackCapture),
+    ProcessLoopback(ProcessLoopbackCapture),
     Virtual(VirtualCapture),
 }
 
@@ -44,6 +47,7 @@ impl CaptureSource {
     fn start(&mut self) -> Result<broadcast::Receiver<AudioFrame>, SessionError> {
         match self {
             CaptureSource::Loopback(c) => c.start(),
+            CaptureSource::ProcessLoopback(c) => c.start(),
             CaptureSource::Virtual(c) => c.start(),
         }
     }
@@ -52,6 +56,7 @@ impl CaptureSource {
     fn current_level(&self) -> f32 {
         match self {
             CaptureSource::Loopback(c) => c.current_level(),
+            CaptureSource::ProcessLoopback(c) => c.current_level(),
             CaptureSource::Virtual(_) => 0.0,
         }
     }
@@ -59,6 +64,7 @@ impl CaptureSource {
     fn stop(&self) {
         match self {
             CaptureSource::Loopback(c) => c.stop(),
+            CaptureSource::ProcessLoopback(c) => c.stop(),
             CaptureSource::Virtual(c) => c.stop(),
         }
     }
@@ -85,18 +91,14 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct RouteHandles {
     volume: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
-    /// None for same-device routes (no loopback renderer needed, session control only).
+    /// None for same-device routes (no renderer, capture is suppressed to avoid feedback).
     renderer: Option<AudioRenderer>,
-    /// Windows audio session control for app-capture sources (mute/volume on the app itself).
-    app_session: Option<AppSessionControl>,
 }
 
 struct CaptureHandle {
     capture: CaptureSource,
     sender_count: usize,
     exe_name: Option<String>,
-    /// Shared session control — cloned into each RouteHandle for splitter fanout.
-    app_session: Option<AppSessionControl>,
 }
 
 pub struct RoutingEngine {
@@ -169,12 +171,8 @@ impl RoutingEngine {
         }
         if let Some(handles) = lock_recover(&self.routes).get(route_id) {
             for handle in handles {
+                // Per-route: mute only our captured copy, not the app/device globally.
                 handle.muted.store(muted, Ordering::Relaxed);
-                // For app-capture sources, also mute the Windows audio session so the app's
-                // direct-to-device path is silenced (not just the Nodus loopback copy).
-                if let Some(ref session) = handle.app_session {
-                    session.set_mute(muted);
-                }
             }
         }
         Ok(())
@@ -190,11 +188,8 @@ impl RoutingEngine {
         }
         if let Some(handles) = lock_recover(&self.routes).get(route_id) {
             for handle in handles {
+                // Per-route: scale only our captured copy, not the app/device globally.
                 handle.volume.store(volume_to_atomic(volume), Ordering::Relaxed);
-                // Also apply volume to the Windows audio session for app-capture sources.
-                if let Some(ref session) = handle.app_session {
-                    session.set_volume(volume);
-                }
             }
         }
         Ok(())
@@ -271,50 +266,59 @@ impl RoutingEngine {
         captures: &mut HashMap<String, CaptureHandle>,
         routes: &mut HashMap<String, Vec<RouteHandles>>,
     ) -> Result<(), EngineError> {
-        // For app-capture sources, discover device ID and get Windows session control.
-        let (capture_device_id, app_session) = if let Some(ref exe) = ar.exe_name {
-            match find_device_for_exe(exe) {
-                Ok((id, ctrl)) => {
-                    debug!("resolved {exe} → device {id}");
-                    (id, Some(ctrl))
+        // Choose the capture backend + a key for splitter fanout reuse:
+        //   - App source (exe): isolated WASAPI process loopback on the app's PID.
+        //     Per-route mute/volume act on our captured copy only — no global app mute.
+        //   - Nodus virtual source: kernel-driver ring buffer (fallback to loopback).
+        //   - Device source: whole-device loopback / input capture.
+        enum Backend {
+            Process(u32),
+            Virtual,
+            Device,
+        }
+        let (capture_key, backend) = if let Some(ref exe) = ar.exe_name {
+            match find_audio_pid_for_exe(exe) {
+                Ok(pid) => {
+                    debug!("resolved {exe} → pid {pid} (process loopback)");
+                    (format!("exe:{exe}"), Backend::Process(pid))
                 }
                 Err(e) => {
                     debug!("skipping route for {exe}: {e}");
                     return Ok(()); // app not running or no audio session yet
                 }
             }
+        } else if ar.from_is_virtual {
+            (ar.from_device_id.clone(), Backend::Virtual)
         } else {
-            (ar.from_device_id.clone(), None)
+            (ar.from_device_id.clone(), Backend::Device)
         };
 
-        // Reuse existing capture if same source device (splitter fanout).
-        let (receiver, route_session) = if let Some(handle) = captures.get_mut(&capture_device_id) {
+        // Reuse an existing capture for the same source (splitter fanout).
+        let receiver = if let Some(handle) = captures.get_mut(&capture_key) {
             handle.sender_count += 1;
-            let rx = handle
+            handle
                 .capture
                 .start()
-                .map_err(|e| EngineError::Session(e.to_string()))?;
-            (rx, handle.app_session.clone())
+                .map_err(|e| EngineError::Session(e.to_string()))?
         } else {
-            // Pick the capture backend. A Nodus virtual source reads from the
-            // kernel driver's shared ring buffer (VirtualCapture); everything else
-            // uses WASAPI loopback/input capture. If the ring isn't available
-            // (driver not loaded), fall back to loopback — the virtual speaker is a
-            // real render endpoint, so loopback still captures whatever apps play.
-            let mut source = if ar.from_is_virtual && ar.exe_name.is_none() {
-                CaptureSource::Virtual(VirtualCapture::new())
-            } else {
-                CaptureSource::Loopback(LoopbackCapture::new(
-                    capture_device_id.clone(),
+            let mut source = match backend {
+                Backend::Process(pid) => {
+                    CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(pid, self.format))
+                }
+                Backend::Virtual => CaptureSource::Virtual(VirtualCapture::new()),
+                Backend::Device => CaptureSource::Loopback(LoopbackCapture::new(
+                    ar.from_device_id.clone(),
                     self.format,
-                ))
+                )),
             };
             let rx = match source.start() {
                 Ok(rx) => rx,
+                // If the Nodus ring isn't available (driver not loaded), fall back to
+                // WASAPI loopback — the virtual speaker is a real render endpoint.
                 Err(e) if matches!(source, CaptureSource::Virtual(_)) => {
                     debug!("virtual ring unavailable ({e}); falling back to WASAPI loopback");
                     let mut lb = CaptureSource::Loopback(LoopbackCapture::new(
-                        capture_device_id.clone(),
+                        ar.from_device_id.clone(),
                         self.format,
                     ));
                     let rx = lb
@@ -326,37 +330,29 @@ impl RoutingEngine {
                 Err(e) => return Err(EngineError::Session(e.to_string())),
             };
             captures.insert(
-                capture_device_id.clone(),
+                capture_key.clone(),
                 CaptureHandle {
                     capture: source,
                     sender_count: 1,
                     exe_name: ar.exe_name.clone(),
-                    app_session: app_session.clone(),
                 },
             );
-            (rx, app_session)
+            rx
         };
 
-        // Apply initial mute/volume to the Windows audio session (for app-capture sources).
-        if let Some(ref s) = route_session {
-            s.set_mute(ar.muted);
-            s.set_volume(ar.volume);
-        }
-
-        // Same-device route (e.g. Spotify → same headphones it already plays to):
-        // loopback capture + re-render creates a feedback loop causing buzzing.
-        // Use session control only — no capture/render needed.
-        if !capture_device_id.is_empty() && capture_device_id == ar.to_device_id {
-            debug!(
-                "same-device route {}: session-control only (no loopback)",
-                ar.exe_name.as_deref().unwrap_or(&capture_device_id)
-            );
+        // Feedback guard applies only to whole-device loopback sources: capturing a
+        // device and rendering back to it loops. App process loopback captures only the
+        // app (no device feedback); virtual sources read the driver ring.
+        let is_device_source = ar.exe_name.is_none() && !ar.from_is_virtual;
+        if is_device_source && !ar.from_device_id.is_empty() && ar.from_device_id == ar.to_device_id
+        {
+            debug!("same-device route on {}: skipping render to avoid feedback", ar.from_device_id);
             let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
             let muted = Arc::new(AtomicBool::new(ar.muted));
             routes
                 .entry(ar.route_id)
                 .or_default()
-                .push(RouteHandles { volume, muted, renderer: None, app_session: route_session });
+                .push(RouteHandles { volume, muted, renderer: None });
             return Ok(());
         }
 
@@ -366,14 +362,14 @@ impl RoutingEngine {
         renderer.start(receiver, Arc::clone(&volume), Arc::clone(&muted));
 
         debug!(
-            "wired route {} → {} (vol={:.2} muted={})",
-            ar.from_device_id, ar.to_device_id, ar.volume, ar.muted
+            "wired route → {} (vol={:.2} muted={})",
+            ar.to_device_id, ar.volume, ar.muted
         );
 
         routes
             .entry(ar.route_id)
             .or_default()
-            .push(RouteHandles { volume, muted, renderer: Some(renderer), app_session: route_session });
+            .push(RouteHandles { volume, muted, renderer: Some(renderer) });
         Ok(())
     }
 
