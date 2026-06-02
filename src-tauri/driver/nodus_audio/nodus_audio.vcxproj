@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{CF8D6B2A-F0E1-4A3C-8D9B-12345678ABCD}</ProjectGuid>
+    <TemplateGuid>{A1D5C3E2-4F6B-4D7A-9C8E-B2340FADE123}</TemplateGuid>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <MinimumVisualStudioVersion>16.0</MinimumVisualStudioVersion>
+    <!-- WDK kernel-mode driver -->
+    <Configuration Condition="'$(Configuration)'==''">Release</Configuration>
+    <Platform Condition="'$(Platform)'==''">x64</Platform>
+  </PropertyGroup>
+
+  <!-- Import WDK kernel-mode driver props -->
+  <Import Project="$(WDKContentRoot)build\WindowsDriver.Default.props" />
+
+  <PropertyGroup>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <!-- Target Windows 10 / 11 -->
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <KMDF_VERSION_MAJOR></KMDF_VERSION_MAJOR>
+    <ATL_ENABLE_VTABLE_VALIDATION>false</ATL_ENABLE_VTABLE_VALIDATION>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <TargetName>nodus_audio</TargetName>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <TargetName>nodus_audio</TargetName>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- PortCls requires C++ exceptions disabled in kernel -->
+      <ExceptionHandling>false</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <PreprocessorDefinitions>_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- Audio kernel libraries -->
+      <AdditionalDependencies>portcls.lib;ks.lib;ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Inf>
+      <SpecifyArchitecture>true</SpecifyArchitecture>
+      <SpecifyDriverVerDirectiveVersion>true</SpecifyDriverVerDirectiveVersion>
+    </Inf>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="adapter.cpp" />
+    <ClCompile Include="miniport.cpp" />
+    <ClCompile Include="stream.cpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="common.h" />
+    <ClInclude Include="miniport.h" />
+    <ClInclude Include="stream.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Inf Include="nodus_audio.inf" />
+  </ItemGroup>
+
+  <Import Project="$(WDKContentRoot)build\WindowsDriver.targets" />
+
+</Project>

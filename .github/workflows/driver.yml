@@ -1,0 +1,168 @@
+name: Build Nodus Virtual Audio Driver
+
+# Builds and test-signs src-tauri/driver/nodus_audio → nodus_audio.sys (+ .inf, .cat, .cer).
+# Output is a test-signed driver package: install with Test Mode on (bcdedit /set testsigning on),
+# or re-sign with an EV / attestation-signed certificate for release distribution.
+#
+# Build toolchain: the Enterprise WDK (EWDK) — a self-contained command-line build
+# environment (MSBuild + compilers + SDK + WDK) that needs no Visual Studio VSIX.
+# It is Microsoft's recommended way to build drivers in CI.
+#
+#   https://learn.microsoft.com/windows-hardware/drivers/develop/installing-the-enterprise-wdk
+#
+# REQUIRED ONE-TIME SETUP:
+#   The EWDK ISO download is gated by Microsoft and its URL changes per release, so it
+#   cannot be hard-coded. Set a repository variable EWDK_ISO_URL pointing to the EWDK ISO
+#   (Settings → Secrets and variables → Actions → Variables → New variable), or pass it
+#   via the workflow_dispatch input below.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ewdk_iso_url:
+        description: "EWDK ISO direct download URL (overrides the EWDK_ISO_URL repo variable)"
+        required: false
+        type: string
+  push:
+    paths:
+      - "src-tauri/driver/**"
+      - ".github/workflows/driver.yml"
+    tags:
+      - "driver-v*"
+
+env:
+  DRIVER_DIR: src-tauri/driver/nodus_audio
+  PROJECT: nodus_audio.vcxproj
+  CONFIG: Release
+  PLATFORM: x64
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve EWDK ISO URL
+        id: ewdk
+        shell: pwsh
+        run: |
+          $url = "${{ inputs.ewdk_iso_url }}"
+          if ([string]::IsNullOrWhiteSpace($url)) { $url = "${{ vars.EWDK_ISO_URL }}" }
+          if ([string]::IsNullOrWhiteSpace($url)) {
+            Write-Error "No EWDK ISO URL. Set the EWDK_ISO_URL repo variable or pass the workflow_dispatch input. See the comment at the top of driver.yml."
+            exit 1
+          }
+          "url=$url" >> $env:GITHUB_OUTPUT
+          # Stable cache key from the URL so reruns reuse the downloaded ISO.
+          $hash = [System.BitConverter]::ToString(
+            [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+              [System.Text.Encoding]::UTF8.GetBytes($url))).Replace("-","").Substring(0,16)
+          "cachekey=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Cache EWDK ISO
+        id: cache-ewdk
+        uses: actions/cache@v4
+        with:
+          path: ewdk.iso
+          key: ewdk-iso-${{ steps.ewdk.outputs.cachekey }}
+
+      - name: Download EWDK ISO
+        if: steps.cache-ewdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Downloading EWDK ISO (this is several GB)..."
+          Invoke-WebRequest -Uri "${{ steps.ewdk.outputs.url }}" -OutFile ewdk.iso -UseBasicParsing
+          $size = (Get-Item ewdk.iso).Length
+          Write-Host "Downloaded $([math]::Round($size/1GB,2)) GB"
+          if ($size -lt 1GB) { Write-Error "ISO looks too small — check the URL."; exit 1 }
+
+      - name: Mount EWDK and build driver
+        id: build
+        shell: pwsh
+        run: |
+          $iso = (Resolve-Path ewdk.iso).Path
+          $mount = Mount-DiskImage -ImagePath $iso -PassThru
+          $drive = ($mount | Get-Volume).DriveLetter + ":"
+          Write-Host "EWDK mounted at $drive"
+          "drive=$drive" >> $env:GITHUB_OUTPUT
+
+          # SetupBuildEnv.cmd configures WDKContentRoot/PATH in the *current* cmd,
+          # so msbuild (and signtool/inf2cat) resolve from the EWDK afterwards.
+          $proj = Join-Path $env:DRIVER_DIR $env:PROJECT
+          $cmd = "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && msbuild `"$proj`" /p:Configuration=$env:CONFIG /p:Platform=$env:PLATFORM /m"
+          cmd.exe /c $cmd
+          if ($LASTEXITCODE -ne 0) { Write-Error "Driver build failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Locate build output
+        id: out
+        shell: pwsh
+        run: |
+          $sys = Get-ChildItem -Path $env:DRIVER_DIR -Recurse -Filter nodus_audio.sys |
+                 Where-Object { $_.FullName -match "\\$($env:PLATFORM)\\$($env:CONFIG)" } |
+                 Select-Object -First 1
+          if (-not $sys) { $sys = Get-ChildItem -Path $env:DRIVER_DIR -Recurse -Filter nodus_audio.sys | Select-Object -First 1 }
+          if (-not $sys) { Write-Error "nodus_audio.sys not found after build"; exit 1 }
+          $pkg = $sys.Directory.FullName
+          Write-Host "Package dir: $pkg"
+          "pkgdir=$pkg" >> $env:GITHUB_OUTPUT
+          # Ensure the .inf sits next to the .sys for inf2cat / install.
+          Copy-Item (Join-Path $env:DRIVER_DIR "nodus_audio.inf") $pkg -Force
+
+      - name: Test-sign driver (.sys + .cat)
+        shell: pwsh
+        run: |
+          $drive = "${{ steps.build.outputs.drive }}"
+          $pkg = "${{ steps.out.outputs.pkgdir }}"
+
+          # Generate an ephemeral self-signed code-signing cert for test signing.
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject "CN=Nodus Test Certificate" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeyUsage DigitalSignature -KeyExportPolicy Exportable `
+            -FriendlyName "Nodus Test Certificate" `
+            -NotAfter (Get-Date).AddYears(3)
+          $thumb = $cert.Thumbprint
+          # Export the public cert so users can trust it (Trusted Root + Trusted Publishers).
+          Export-Certificate -Cert $cert -FilePath (Join-Path $pkg "nodus_test.cer") | Out-Null
+
+          # Make EWDK tools (signtool, inf2cat) available in this shell.
+          cmd.exe /c "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && set" | ForEach-Object {
+            if ($_ -match "^(PATH)=(.*)$") { $env:PATH = $matches[2] }
+          }
+
+          Push-Location $pkg
+          signtool sign /v /fd SHA256 /sha1 $thumb nodus_audio.sys
+          if ($LASTEXITCODE -ne 0) { Write-Error ".sys signing failed"; exit 1 }
+
+          inf2cat /driver:. /os:10_X64,Server10_X64
+          if ($LASTEXITCODE -ne 0) { Write-Error "inf2cat failed"; exit 1 }
+
+          signtool sign /v /fd SHA256 /sha1 $thumb nodus_audio.cat
+          if ($LASTEXITCODE -ne 0) { Write-Error ".cat signing failed"; exit 1 }
+          Pop-Location
+
+      - name: Unmount EWDK
+        if: always() && steps.build.outputs.drive != ''
+        shell: pwsh
+        run: Dismount-DiskImage -ImagePath (Resolve-Path ewdk.iso).Path
+
+      - name: Collect driver package
+        shell: pwsh
+        run: |
+          $pkg = "${{ steps.out.outputs.pkgdir }}"
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item "$pkg\nodus_audio.sys" out\ -Force
+          Copy-Item "$pkg\nodus_audio.inf" out\ -Force
+          Copy-Item "$pkg\nodus_audio.cat" out\ -Force
+          Copy-Item "$pkg\nodus_test.cer" out\ -Force
+          Copy-Item "$env:DRIVER_DIR\install.ps1"   out\ -Force
+          Copy-Item "$env:DRIVER_DIR\uninstall.ps1" out\ -Force
+          Get-ChildItem out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodus_audio-driver-${{ env.PLATFORM }}-${{ env.CONFIG }}
+          path: out/**
+          if-no-files-found: error
