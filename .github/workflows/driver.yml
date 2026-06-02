@@ -125,10 +125,27 @@ jobs:
           Copy-Item (Join-Path $env:DRIVER_DIR "nodus_audio.inf") $pkg -Force
 
       - name: Test-sign driver (.sys + .cat)
+        id: sign
         shell: pwsh
         run: |
-          $drive = "${{ steps.build.outputs.drive }}"
-          $pkg = "${{ steps.out.outputs.pkgdir }}"
+          $drive  = "${{ steps.build.outputs.drive }}"
+          $pkgsrc = "${{ steps.out.outputs.pkgdir }}"
+
+          # Stage a clean, flat package dir with EXACTLY the inf + sys. inf2cat is very
+          # sensitive to stray files / layout in the package dir; a minimal dir with the
+          # files next to the inf is the canonical input.
+          $stage = Join-Path $env:GITHUB_WORKSPACE "pkgstage"
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item (Join-Path $pkgsrc      "nodus_audio.sys") $stage -Force
+          Copy-Item (Join-Path $env:DRIVER_DIR "nodus_audio.inf") $stage -Force
+          "pkg=$stage" >> $env:GITHUB_OUTPUT
+
+          Write-Host "=== staging dir ==="
+          Get-ChildItem $stage | Format-Table Name,Length
+          Write-Host "=== nodus_audio.inf ==="
+          Get-Content (Join-Path $stage "nodus_audio.inf")
+          Write-Host "==================="
 
           # Generate an ephemeral self-signed code-signing cert for test signing.
           $cert = New-SelfSignedCertificate -Type CodeSigningCert `
@@ -139,18 +156,18 @@ jobs:
             -NotAfter (Get-Date).AddYears(3)
           $thumb = $cert.Thumbprint
           # Export the public cert so users can trust it (Trusted Root + Trusted Publishers).
-          Export-Certificate -Cert $cert -FilePath (Join-Path $pkg "nodus_test.cer") | Out-Null
+          Export-Certificate -Cert $cert -FilePath (Join-Path $stage "nodus_test.cer") | Out-Null
 
           # Make EWDK tools (signtool, inf2cat) available in this shell.
           cmd.exe /c "`"$drive\BuildEnv\SetupBuildEnv.cmd`" && set" | ForEach-Object {
             if ($_ -match "^(PATH)=(.*)$") { $env:PATH = $matches[2] }
           }
 
-          Push-Location $pkg
+          Push-Location $stage
           signtool sign /v /fd SHA256 /sha1 $thumb nodus_audio.sys
           if ($LASTEXITCODE -ne 0) { Write-Error ".sys signing failed"; exit 1 }
 
-          inf2cat /driver:. /os:10_X64,Server10_X64
+          inf2cat /driver:. /os:10_X64
           if ($LASTEXITCODE -ne 0) { Write-Error "inf2cat failed"; exit 1 }
 
           signtool sign /v /fd SHA256 /sha1 $thumb nodus_audio.cat
@@ -165,7 +182,7 @@ jobs:
       - name: Collect driver package
         shell: pwsh
         run: |
-          $pkg = "${{ steps.out.outputs.pkgdir }}"
+          $pkg = "${{ steps.sign.outputs.pkg }}"
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item "$pkg\nodus_audio.sys" out\ -Force
           Copy-Item "$pkg\nodus_audio.inf" out\ -Force
