@@ -79,8 +79,15 @@ jobs:
         shell: pwsh
         run: |
           $iso = (Resolve-Path ewdk.iso).Path
-          $mount = Mount-DiskImage -ImagePath $iso -PassThru
-          $drive = ($mount | Get-Volume).DriveLetter + ":"
+          Mount-DiskImage -ImagePath $iso | Out-Null
+          # Get-Volume can race the mount and return an empty DriveLetter; retry briefly.
+          $drive = $null
+          for ($i = 0; $i -lt 30; $i++) {
+            $vol = Get-DiskImage -ImagePath $iso | Get-Volume -ErrorAction SilentlyContinue
+            if ($vol -and $vol.DriveLetter) { $drive = "$($vol.DriveLetter):"; break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $drive) { Write-Error "Could not resolve EWDK drive letter after mount"; exit 1 }
           Write-Host "EWDK mounted at $drive"
           "drive=$drive" >> $env:GITHUB_OUTPUT
 
@@ -151,9 +158,9 @@ jobs:
           Pop-Location
 
       - name: Unmount EWDK
-        if: always() && steps.build.outputs.drive != ''
+        if: always()
         shell: pwsh
-        run: Dismount-DiskImage -ImagePath (Resolve-Path ewdk.iso).Path
+        run: if (Test-Path ewdk.iso) { Dismount-DiskImage -ImagePath (Resolve-Path ewdk.iso).Path | Out-Null }
 
       - name: Collect driver package
         shell: pwsh
