@@ -49,6 +49,10 @@ pub struct Route {
     /// Linear gain [0.0 .. 1.0], default 1.0
     pub volume: f32,
     pub muted: bool,
+    /// Stereo balance [-1.0 = full left .. 0.0 = center .. 1.0 = full right], default 0.0.
+    /// Applied only to 2-channel routes; ignored for other channel counts.
+    #[serde(default)]
+    pub pan: f32,
 }
 
 impl Route {
@@ -59,6 +63,7 @@ impl Route {
             to_node,
             volume: 1.0,
             muted: false,
+            pan: 0.0,
         }
     }
 }

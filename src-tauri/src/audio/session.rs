@@ -807,6 +807,7 @@ pub mod platform {
             mut source: tokio::sync::broadcast::Receiver<AudioFrame>,
             volume: Arc<std::sync::atomic::AtomicU32>,
             muted: Arc<AtomicBool>,
+            pan: Arc<std::sync::atomic::AtomicU32>,
         ) {
             let device_id = self.device_id.clone();
             let format = self.format;
@@ -814,7 +815,7 @@ pub mod platform {
 
             std::thread::spawn(move || {
                 if let Err(e) =
-                    run_render(device_id, format, stop_flag, &mut source, volume, muted)
+                    run_render(device_id, format, stop_flag, &mut source, volume, muted, pan)
                 {
                     error!("audio render error: {e}");
                 }
@@ -833,6 +834,7 @@ pub mod platform {
         source: &mut tokio::sync::broadcast::Receiver<AudioFrame>,
         volume_atomic: Arc<std::sync::atomic::AtomicU32>,
         muted: Arc<AtomicBool>,
+        pan_atomic: Arc<std::sync::atomic::AtomicU32>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
@@ -900,9 +902,24 @@ pub mod platform {
                     Ok(mut frame) => {
                         let is_muted = muted.load(Ordering::Relaxed);
                         let vol = f32::from_bits(volume_atomic.load(Ordering::Relaxed));
+                        let pan = f32::from_bits(pan_atomic.load(Ordering::Relaxed));
 
-                        for sample in &mut frame {
-                            *sample = if is_muted { 0.0 } else { *sample * vol };
+                        if is_muted {
+                            for sample in &mut frame {
+                                *sample = 0.0;
+                            }
+                        } else if format.channels == 2 && pan != 0.0 {
+                            // Stereo balance: pan<0 attenuates right, pan>0 attenuates left.
+                            let lg = if pan <= 0.0 { 1.0 } else { 1.0 - pan };
+                            let rg = if pan >= 0.0 { 1.0 } else { 1.0 + pan };
+                            for pair in frame.chunks_exact_mut(2) {
+                                pair[0] *= vol * lg;
+                                pair[1] *= vol * rg;
+                            }
+                        } else {
+                            for sample in &mut frame {
+                                *sample *= vol;
+                            }
                         }
 
                         let frames_to_write =
@@ -1044,6 +1061,7 @@ pub mod platform {
             _source: tokio::sync::broadcast::Receiver<AudioFrame>,
             _volume: Arc<std::sync::atomic::AtomicU32>,
             _muted: Arc<AtomicBool>,
+            _pan: Arc<std::sync::atomic::AtomicU32>,
         ) {
         }
 

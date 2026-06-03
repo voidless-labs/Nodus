@@ -70,6 +70,7 @@ function buildRoutingGraph(nodes, edges) {
       to_node: e.to.node,
       volume: (e.vol ?? 100) / 100,
       muted: effMuted(fn) || effMuted(tn),
+      pan: (e.pan ?? 0) / 100,
     });
   });
 
@@ -372,6 +373,12 @@ export default function App() {
     if (liveRef.current) Bridge.setRouteVolume(id, v / 100).catch(console.error);
   };
 
+  // Stereo balance per route. UI stores -100..100 (center 0); engine takes -1..1.
+  const setEdgePan = (id, p) => {
+    setEdges(es => es.map(e => e.id === id ? { ...e, pan: p } : e));
+    if (liveRef.current) Bridge.setRoutePan(id, p / 100).catch(console.error);
+  };
+
   const deleteNode = (id) => {
     setNodes(n => { const c = { ...n }; delete c[id]; return c; });
     setEdges(es => es.filter(e => e.from.node !== id && e.to.node !== id));
@@ -590,7 +597,7 @@ export default function App() {
             node: selNode, edge: selEdge, multi: multiNodes, nodes, edges,
             onCollapse: () => setUi(u => ({ ...u, insp: false, inspAuto: false })),
             onRename: rename, onVolume: setVolume, onParam: setParam, onMute: muteNode, onSolo: soloNode,
-            onDuplicate: duplicateNode, onDelete: deleteNode, onDeleteEdge: deleteEdge, onEdgeVol: setEdgeVol,
+            onDuplicate: duplicateNode, onDelete: deleteNode, onDeleteEdge: deleteEdge, onEdgeVol: setEdgeVol, onEdgePan: setEdgePan,
             onSelectNode: selectNode, onAddPort: addPort, onRemovePort: removePort,
             onDeleteSelection: deleteSelection, onMuteSelection: muteSelection,
             isPinned: selNode ? (scene.pinned || []).includes(selNode.id) : false, onTogglePin: togglePin,

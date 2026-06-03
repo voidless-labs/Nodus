@@ -50,6 +50,10 @@ export async function setRouteVolume(routeId, volume) {
   return _invoke_cmd('set_route_volume', { route_id: routeId, volume });
 }
 
+export async function setRoutePan(routeId, pan) {
+  return _invoke_cmd('set_route_pan', { route_id: routeId, pan });
+}
+
 export async function startEngine() {
   return _invoke_cmd('start_engine');
 }

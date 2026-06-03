@@ -28,6 +28,7 @@ fn main() {
             nodus::commands::bridge::apply_routing_graph,
             nodus::commands::bridge::set_route_mute,
             nodus::commands::bridge::set_route_volume,
+            nodus::commands::bridge::set_route_pan,
             nodus::commands::bridge::start_engine,
             nodus::commands::bridge::stop_engine,
             nodus::commands::bridge::get_virtual_setup_status,

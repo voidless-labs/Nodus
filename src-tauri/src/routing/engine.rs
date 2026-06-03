@@ -91,6 +91,8 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct RouteHandles {
     volume: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
+    /// Stereo balance as f32 bits in [-1.0 .. 1.0] (shared with the render thread).
+    pan: Arc<AtomicU32>,
     /// None for same-device routes (no renderer, capture is suppressed to avoid feedback).
     renderer: Option<AudioRenderer>,
 }
@@ -207,6 +209,22 @@ impl RoutingEngine {
             for handle in handles {
                 // Per-route: scale only our captured copy, not the app/device globally.
                 handle.volume.store(volume_to_atomic(volume), Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
+    /// Update stereo balance [-1.0 .. 1.0] on a live route without restarting.
+    pub fn set_route_pan(&self, route_id: &str, pan: f32) -> Result<(), EngineError> {
+        let pan = pan.clamp(-1.0, 1.0);
+        {
+            let mut g = lock_recover(&self.graph);
+            g.set_pan(&route_id.to_string(), pan)
+                .map_err(|e| EngineError::Session(e.to_string()))?;
+        }
+        if let Some(handles) = lock_recover(&self.routes).get(route_id) {
+            for handle in handles {
+                handle.pan.store(volume_to_atomic(pan), Ordering::Relaxed);
             }
         }
         Ok(())
@@ -375,30 +393,37 @@ impl RoutingEngine {
             debug!("same-device route on {}: skipping render to avoid feedback", ar.from_device_id);
             let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
             let muted = Arc::new(AtomicBool::new(ar.muted));
+            let pan = Arc::new(AtomicU32::new(volume_to_atomic(ar.pan)));
             routes
                 .entry(ar.route_id)
                 .or_default()
-                .push(RouteHandles { volume, muted, renderer: None });
+                .push(RouteHandles { volume, muted, pan, renderer: None });
             return Ok(());
         }
 
         let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
         let muted = Arc::new(AtomicBool::new(ar.muted));
+        let pan = Arc::new(AtomicU32::new(volume_to_atomic(ar.pan)));
         // Renderer takes the SOURCE format; AUTOCONVERTPCM remixes/resamples to the
         // output device. This fixes channel-count / sample-rate mismatch for device
         // loopback sources whose mix format differs from our default.
         let renderer = AudioRenderer::new(ar.to_device_id.clone(), capture_format);
-        renderer.start(receiver, Arc::clone(&volume), Arc::clone(&muted));
+        renderer.start(
+            receiver,
+            Arc::clone(&volume),
+            Arc::clone(&muted),
+            Arc::clone(&pan),
+        );
 
         debug!(
-            "wired route → {} (vol={:.2} muted={})",
-            ar.to_device_id, ar.volume, ar.muted
+            "wired route → {} (vol={:.2} muted={} pan={:.2})",
+            ar.to_device_id, ar.volume, ar.muted, ar.pan
         );
 
         routes
             .entry(ar.route_id)
             .or_default()
-            .push(RouteHandles { volume, muted, renderer: Some(renderer) });
+            .push(RouteHandles { volume, muted, pan, renderer: Some(renderer) });
         Ok(())
     }
 

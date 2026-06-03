@@ -189,6 +189,13 @@ impl Graph {
             .map(|r| r.volume = volume)
     }
 
+    pub fn set_pan(&mut self, route_id: &RouteId, pan: f32) -> Result<(), GraphError> {
+        self.routes
+            .get_mut(route_id)
+            .ok_or_else(|| GraphError::RouteNotFound(route_id.clone()))
+            .map(|r| r.pan = pan.clamp(-1.0, 1.0))
+    }
+
     pub fn get_node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
     }
@@ -257,6 +264,8 @@ pub struct ActiveRoute {
     pub to_device_id: String,
     pub volume: f32,
     pub muted: bool,
+    /// Stereo balance of the final edge into the output [-1.0 .. 1.0].
+    pub pan: f32,
 }
 
 impl Graph {
@@ -319,6 +328,7 @@ impl Graph {
                                 to_device_id: dest.device_id.clone(),
                                 volume,
                                 muted,
+                                pan: route.pan,
                             });
                         }
                     }
@@ -403,6 +413,13 @@ mod tests {
         assert!((g.get_route(&rid).unwrap().volume - 0.5).abs() < f32::EPSILON);
 
         assert!(matches!(g.set_volume(&rid, 1.5), Err(GraphError::InvalidVolume(_))));
+
+        // Pan defaults to centre and clamps to [-1, 1].
+        assert_eq!(g.get_route(&rid).unwrap().pan, 0.0);
+        g.set_pan(&rid, -0.5).unwrap();
+        assert!((g.get_route(&rid).unwrap().pan + 0.5).abs() < f32::EPSILON);
+        g.set_pan(&rid, 2.0).unwrap();
+        assert_eq!(g.get_route(&rid).unwrap().pan, 1.0);
     }
 
     #[test]

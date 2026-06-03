@@ -126,6 +126,16 @@ pub async fn set_route_volume(
     engine.0.set_route_volume(&route_id, volume).map_err(|e| e.to_string())
 }
 
+/// Set stereo balance [-1.0 .. 1.0] on a specific route without restarting.
+#[tauri::command]
+pub async fn set_route_pan(
+    route_id: RouteId,
+    pan: f32,
+    engine: State<'_, EngineState>,
+) -> Result<(), String> {
+    engine.0.set_route_pan(&route_id, pan).map_err(|e| e.to_string())
+}
+
 /// Start the routing engine (WASAPI setup → blocking thread).
 #[tauri::command]
 pub async fn start_engine(engine: State<'_, EngineState>) -> Result<(), String> {
