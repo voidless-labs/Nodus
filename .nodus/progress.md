@@ -149,6 +149,19 @@ CaptureHandle, ветки в set_route_mute/volume). Теперь mute/volume п
 ⚠️ Реальная работа process loopback (захват именно нужного PID, отсутствие тишины при
 polling) проверяется только на реальной машине с воспроизводящимся приложением.
 
+## Цикл ремонта 4 (03.06.2026) — формат capture↔render (#5)
+
+### ✅ FIX-009 — Реальный формат захвата прокидывается в рендерер
+Device-loopback отдаёт кадры в mix-формате устройства (его каналы/частота, всегда
+f32), а рендерер раньше трактовал их как 48k/2ch → разъезд каналов + сдвиг скорости.
+- `get_device_capture_format(device_id)` (session.rs): для render-endpoint — реальный
+  GetMixFormat (rate/channels, 32-bit), для input — наш дефолт (там AUTOCONVERTPCM).
+- `CaptureHandle.format` хранит реальный формат источника; рендерер инициализируется
+  им + AUTOCONVERTPCM → Windows сам ремиксит/ресэмплит source→output device.
+- Process loopback / virtual ring используют наш дефолт (они и так в нём).
+Проверено: cargo build (lib) ✅, 33 теста ✅, clippy без новых warning.
+⚠️ Слух/качество — на реальной машине.
+
 ## Что осталось до полного MVP
 
 ### Требует `npm run tauri dev`:

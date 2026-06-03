@@ -97,6 +97,53 @@ pub mod platform {
         }
     }
 
+    /// Determine the format a capture on this device will actually produce.
+    ///  - Render endpoint (loopback): the device's shared-mode mix format. Loopback
+    ///    cannot AUTOCONVERT, so frames arrive in this format (always 32-bit float,
+    ///    but channel count / sample rate vary per device). The renderer must be told
+    ///    so it can AUTOCONVERT source→output correctly.
+    ///  - Capture endpoint (mic/input): we capture with AUTOCONVERTPCM into our
+    ///    normalized format, so report the default.
+    pub fn get_device_capture_format(device_id: &str) -> Result<AudioFormat, SessionError> {
+        use crate::audio::wasapi::ComGuard;
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::{eRender, IMMEndpoint};
+        use windows::Win32::System::Com::CoTaskMemFree;
+
+        let _com = ComGuard::init()?;
+        unsafe {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .map_err(|e| SessionError::DeviceUnavailable(e.to_string()))?;
+            let device = get_device_by_id(&enumerator, device_id)?;
+
+            let endpoint: IMMEndpoint = device
+                .cast()
+                .map_err(|e| SessionError::DeviceUnavailable(e.to_string()))?;
+            let flow = endpoint
+                .GetDataFlow()
+                .map_err(|e| SessionError::DeviceUnavailable(e.to_string()))?;
+            if flow != eRender {
+                // Input device: capture converts to our normalized format.
+                return Ok(AudioFormat::default());
+            }
+
+            let client: IAudioClient = device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|e| SessionError::Wasapi(WasapiError::AudioClient(e.to_string())))?;
+            let mix = client
+                .GetMixFormat()
+                .map_err(|e| SessionError::Wasapi(WasapiError::AudioClient(e.to_string())))?;
+            let fmt = AudioFormat {
+                sample_rate: (*mix).nSamplesPerSec,
+                channels: (*mix).nChannels,
+                bits_per_sample: 32, // WASAPI shared-mode mix is always 32-bit float
+            };
+            CoTaskMemFree(Some(mix as *mut _));
+            Ok(fmt)
+        }
+    }
+
     /// Loopback capture from a render device (what Windows plays to that device).
     pub struct LoopbackCapture {
         device_id: String,
@@ -924,6 +971,10 @@ pub mod platform {
         Err(SessionError::DeviceUnavailable("process loopback not supported on non-Windows".into()))
     }
 
+    pub fn get_device_capture_format(_device_id: &str) -> Result<AudioFormat, SessionError> {
+        Ok(AudioFormat::default())
+    }
+
     pub struct ProcessLoopbackCapture {
         sender: Option<tokio::sync::broadcast::Sender<AudioFrame>>,
     }
@@ -1001,8 +1052,8 @@ pub mod platform {
 }
 
 pub use platform::{
-    find_audio_pid_for_exe, find_device_for_exe, AppSessionControl, AudioRenderer, LoopbackCapture,
-    ProcessLoopbackCapture,
+    find_audio_pid_for_exe, find_device_for_exe, get_device_capture_format, AppSessionControl,
+    AudioRenderer, LoopbackCapture, ProcessLoopbackCapture,
 };
 
 /// Convert f32 volume [0.0 .. 1.0] to AtomicU32 for lock-free sharing.

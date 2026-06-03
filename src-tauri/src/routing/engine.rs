@@ -24,8 +24,8 @@ use tracing::{debug, info, warn};
 use super::graph::{ActiveRoute, Graph, RoutingGraph};
 use crate::audio::{
     session::{
-        clamp_volume, find_audio_pid_for_exe, volume_to_atomic, AudioFrame, AudioRenderer,
-        LoopbackCapture, ProcessLoopbackCapture, SessionError,
+        clamp_volume, find_audio_pid_for_exe, get_device_capture_format, volume_to_atomic,
+        AudioFrame, AudioRenderer, LoopbackCapture, ProcessLoopbackCapture, SessionError,
     },
     virtual_capture::VirtualCapture,
     wasapi::AudioFormat,
@@ -99,6 +99,9 @@ struct CaptureHandle {
     capture: CaptureSource,
     sender_count: usize,
     exe_name: Option<String>,
+    /// Actual format the capture produces — renderers fed by it must use this so
+    /// WASAPI AUTOCONVERTPCM resamples/remixes source→output device correctly.
+    format: AudioFormat,
 }
 
 pub struct RoutingEngine {
@@ -294,22 +297,30 @@ impl RoutingEngine {
         };
 
         // Reuse an existing capture for the same source (splitter fanout).
-        let receiver = if let Some(handle) = captures.get_mut(&capture_key) {
+        let (receiver, capture_format) = if let Some(handle) = captures.get_mut(&capture_key) {
             handle.sender_count += 1;
-            handle
+            let rx = handle
                 .capture
                 .start()
-                .map_err(|e| EngineError::Session(e.to_string()))?
+                .map_err(|e| EngineError::Session(e.to_string()))?;
+            (rx, handle.format)
         } else {
-            let mut source = match backend {
-                Backend::Process(pid) => {
-                    CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(pid, self.format))
-                }
-                Backend::Virtual => CaptureSource::Virtual(VirtualCapture::new()),
-                Backend::Device => CaptureSource::Loopback(LoopbackCapture::new(
-                    ar.from_device_id.clone(),
+            // Build the source and the format it will actually produce:
+            //  - Process loopback / virtual ring → our normalized format.
+            //  - Device loopback → the device's mix format (channels/rate vary).
+            let (mut source, mut fmt) = match backend {
+                Backend::Process(pid) => (
+                    CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(pid, self.format)),
                     self.format,
-                )),
+                ),
+                Backend::Virtual => (CaptureSource::Virtual(VirtualCapture::new()), self.format),
+                Backend::Device => {
+                    let f = get_device_capture_format(&ar.from_device_id).unwrap_or(self.format);
+                    (
+                        CaptureSource::Loopback(LoopbackCapture::new(ar.from_device_id.clone(), f)),
+                        f,
+                    )
+                }
             };
             let rx = match source.start() {
                 Ok(rx) => rx,
@@ -317,14 +328,14 @@ impl RoutingEngine {
                 // WASAPI loopback — the virtual speaker is a real render endpoint.
                 Err(e) if matches!(source, CaptureSource::Virtual(_)) => {
                     debug!("virtual ring unavailable ({e}); falling back to WASAPI loopback");
-                    let mut lb = CaptureSource::Loopback(LoopbackCapture::new(
-                        ar.from_device_id.clone(),
-                        self.format,
-                    ));
+                    let f = get_device_capture_format(&ar.from_device_id).unwrap_or(self.format);
+                    let mut lb =
+                        CaptureSource::Loopback(LoopbackCapture::new(ar.from_device_id.clone(), f));
                     let rx = lb
                         .start()
                         .map_err(|e| EngineError::Session(e.to_string()))?;
                     source = lb;
+                    fmt = f;
                     rx
                 }
                 Err(e) => return Err(EngineError::Session(e.to_string())),
@@ -335,9 +346,10 @@ impl RoutingEngine {
                     capture: source,
                     sender_count: 1,
                     exe_name: ar.exe_name.clone(),
+                    format: fmt,
                 },
             );
-            rx
+            (rx, fmt)
         };
 
         // Feedback guard applies only to whole-device loopback sources: capturing a
@@ -358,7 +370,10 @@ impl RoutingEngine {
 
         let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
         let muted = Arc::new(AtomicBool::new(ar.muted));
-        let renderer = AudioRenderer::new(ar.to_device_id.clone(), self.format);
+        // Renderer takes the SOURCE format; AUTOCONVERTPCM remixes/resamples to the
+        // output device. This fixes channel-count / sample-rate mismatch for device
+        // loopback sources whose mix format differs from our default.
+        let renderer = AudioRenderer::new(ar.to_device_id.clone(), capture_format);
         renderer.start(receiver, Arc::clone(&volume), Arc::clone(&muted));
 
         debug!(
