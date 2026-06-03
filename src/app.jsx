@@ -46,6 +46,11 @@ function buildRoutingGraph(nodes, edges) {
   const rustNodes = [];
   const rustRoutes = [];
 
+  // Effective mute = own mute OR (some node soloed AND this one isn't).
+  // Mirrors the visual simulation (App.effMuted) so Solo actually mutes routes in the engine.
+  const anySolo = Object.values(nodes).some(n => n.solo);
+  const effMuted = (n) => !!(n.muted || (anySolo && !n.solo && n.type !== 'trigger'));
+
   Object.values(nodes).forEach(n => {
     const nodeType = RUST_NODE_TYPE[n.type];
     if (!nodeType) return;
@@ -64,7 +69,7 @@ function buildRoutingGraph(nodes, edges) {
       from_node: e.from.node,
       to_node: e.to.node,
       volume: (e.vol ?? 100) / 100,
-      muted: !!(fn.muted || tn.muted),
+      muted: effMuted(fn) || effMuted(tn),
     });
   });
 
@@ -354,7 +359,10 @@ export default function App() {
     applyGraphLater();
   };
 
-  const soloNode = (id) => setNodes(n => ({ ...n, [id]: { ...n[id], solo: !n[id].solo } }));
+  const soloNode = (id) => {
+    setNodes(n => ({ ...n, [id]: { ...n[id], solo: !n[id].solo } }));
+    applyGraphLater(); // solo changes effective mute of other routes → push to engine
+  };
   const setVolume = (id, v) => setNodes(n => ({ ...n, [id]: { ...n[id], volume: v } }));
   const rename = (id, name) => setNodes(n => ({ ...n, [id]: { ...n[id], name } }));
   const setParam = (id, k, v) => setNodes(n => ({ ...n, [id]: { ...n[id], params: { ...n[id].params, [k]: v } } }));

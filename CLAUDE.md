@@ -309,13 +309,14 @@ Spotify → Mixer (та же нода, своя громкость)
 - [ ] Проверка критерия готовности end-to-end (требует `npm run tauri dev`)
 
 ### Phase 2 — После MVP
-- [ ] VU meter (volume levels events → UI)
+- [x] VU meter (volume levels events → UI) ✅ 03.06.2026 (бэкенд + UI listener + meter-fill)
+- [x] Save/load routing graph в JSON ✅ 03.06.2026 (doExport/doImport всех сцен)
 - [ ] Logic ноды (условия по процессам)
 - [ ] Trigger ноды (хоткеи, PTT)
-- [ ] Save/load routing graph в JSON
 - [ ] Canvas система (несколько сцен)
 - [ ] Пресеты
 - [ ] FX ноды (EQ, Compressor, Gate и др.)
+- [x] Solo доходит до движка ✅ 03.06.2026 (buildRoutingGraph учитывает effective mute)
 
 ---
 
