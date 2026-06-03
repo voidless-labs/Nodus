@@ -43,7 +43,12 @@ impl Graph {
     }
 
     /// Replace the entire graph from a serialized snapshot.
-    pub fn apply_snapshot(&mut self, snapshot: RoutingGraph) {
+    /// Rejects graphs containing a routing cycle (which would feed audio back on
+    /// itself), and drops duplicate or dangling edges. Validation runs *before*
+    /// any mutation, so a bad snapshot leaves the current graph intact.
+    pub fn apply_snapshot(&mut self, snapshot: RoutingGraph) -> Result<(), GraphError> {
+        Self::detect_cycle(&snapshot)?;
+
         self.nodes.clear();
         self.routes.clear();
         self.outgoing.clear();
@@ -52,9 +57,61 @@ impl Graph {
         for node in snapshot.nodes {
             self.nodes.insert(node.id.clone(), node);
         }
+        // Insert routes, skipping edges to/from unknown nodes and duplicate from→to pairs.
+        let mut seen: std::collections::HashSet<(NodeId, NodeId)> = std::collections::HashSet::new();
         for route in snapshot.routes {
-            self.insert_route_unchecked(route);
+            if !self.nodes.contains_key(&route.from_node)
+                || !self.nodes.contains_key(&route.to_node)
+            {
+                continue;
+            }
+            if seen.insert((route.from_node.clone(), route.to_node.clone())) {
+                self.insert_route_unchecked(route);
+            }
         }
+        Ok(())
+    }
+
+    /// Detect a directed cycle among the snapshot's nodes (iterative DFS, 3-colour).
+    fn detect_cycle(snapshot: &RoutingGraph) -> Result<(), GraphError> {
+        use std::collections::HashSet;
+        let nodes: HashSet<NodeId> = snapshot.nodes.iter().map(|n| n.id.clone()).collect();
+        let mut adj: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for r in &snapshot.routes {
+            if nodes.contains(&r.from_node) && nodes.contains(&r.to_node) {
+                adj.entry(r.from_node.clone()).or_default().push(r.to_node.clone());
+            }
+        }
+        // colour: 0 = unvisited, 1 = on current DFS stack (grey), 2 = done (black)
+        let mut colour: HashMap<NodeId, u8> = HashMap::new();
+        for start in &nodes {
+            if colour.get(start).copied().unwrap_or(0) != 0 {
+                continue;
+            }
+            let mut stack: Vec<(NodeId, usize)> = vec![(start.clone(), 0)];
+            colour.insert(start.clone(), 1);
+            while let Some((node, idx)) = stack.last().cloned() {
+                let children = adj.get(&node).map(|v| v.as_slice()).unwrap_or(&[]);
+                if idx < children.len() {
+                    if let Some(top) = stack.last_mut() {
+                        top.1 += 1;
+                    }
+                    let next = children[idx].clone();
+                    match colour.get(&next).copied().unwrap_or(0) {
+                        0 => {
+                            colour.insert(next.clone(), 1);
+                            stack.push((next, 0));
+                        }
+                        1 => return Err(GraphError::CycleDetected), // back edge → cycle
+                        _ => {}
+                    }
+                } else {
+                    colour.insert(node, 2);
+                    stack.pop();
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn add_node(&mut self, node: Node) {
@@ -346,6 +403,36 @@ mod tests {
         assert!((g.get_route(&rid).unwrap().volume - 0.5).abs() < f32::EPSILON);
 
         assert!(matches!(g.set_volume(&rid, 1.5), Err(GraphError::InvalidVolume(_))));
+    }
+
+    #[test]
+    fn apply_snapshot_rejects_cycle() {
+        // a → b → a is a cycle and must be rejected (graph left unchanged).
+        let a = make_node(NodeType::Source, "da");
+        let b = make_node(NodeType::Mixer, "");
+        let r1 = Route::new(a.id.clone(), b.id.clone());
+        let r2 = Route::new(b.id.clone(), a.id.clone());
+        let snap = RoutingGraph { nodes: vec![a, b], routes: vec![r1, r2] };
+
+        let mut g = Graph::new();
+        assert!(matches!(g.apply_snapshot(snap), Err(GraphError::CycleDetected)));
+        assert_eq!(g.nodes().count(), 0, "rejected snapshot must not mutate the graph");
+    }
+
+    #[test]
+    fn apply_snapshot_dedups_and_drops_dangling() {
+        let a = make_node(NodeType::Source, "da");
+        let b = make_node(NodeType::Output, "db");
+        let dup1 = Route::new(a.id.clone(), b.id.clone());
+        let dup2 = Route::new(a.id.clone(), b.id.clone()); // duplicate from→to
+        let dangling = Route::new(a.id.clone(), "ghost".into()); // unknown dest
+        let snap = RoutingGraph {
+            nodes: vec![a, b],
+            routes: vec![dup1, dup2, dangling],
+        };
+        let mut g = Graph::new();
+        g.apply_snapshot(snap).unwrap();
+        assert_eq!(g.routes().count(), 1, "duplicate and dangling edges dropped");
     }
 
     #[test]

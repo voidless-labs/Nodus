@@ -114,6 +114,11 @@ pub struct RoutingEngine {
     /// All handles under one id share mute/volume — that edge's control.
     routes: Arc<Mutex<HashMap<String, Vec<RouteHandles>>>>,
     format: AudioFormat,
+    /// Serializes engine restarts (apply_graph/start/stop) so concurrent calls don't
+    /// interleave their stop→start sequences. Deliberately separate from the graph/routes
+    /// locks: real-time set_route_volume/mute never take it, so a graph apply (which holds
+    /// it across the ~80ms WASAPI settle) can't stall the volume slider.
+    restart_lock: Mutex<()>,
 }
 
 impl RoutingEngine {
@@ -124,20 +129,27 @@ impl RoutingEngine {
             captures: Arc::new(Mutex::new(HashMap::new())),
             routes: Arc::new(Mutex::new(HashMap::new())),
             format: AudioFormat::default(),
+            restart_lock: Mutex::new(()),
         }
     }
 
     /// Apply a new routing graph snapshot. Restarts active routes.
     pub fn apply_graph(&self, snapshot: RoutingGraph) -> Result<(), EngineError> {
-        let mut g = lock_recover(&self.graph);
-        g.apply_snapshot(snapshot);
+        let _restart = lock_recover(&self.restart_lock);
+
+        // Validate + swap the graph (held briefly — released before the restart below).
+        {
+            let mut g = lock_recover(&self.graph);
+            g.apply_snapshot(snapshot)
+                .map_err(|e| EngineError::Session(e.to_string()))?;
+        }
 
         if self.running.load(Ordering::SeqCst) {
-            drop(g);
             self.stop_internal();
             // Give background capture/render threads time to release their WASAPI COM objects.
             // Without this pause, a rapid stop→start on the same device causes
             // AUDCLNT_E_DEVICE_IN_USE (0x8889000A) in the new session's Initialize().
+            // Only restart_lock is held here — volume/mute commands stay responsive.
             std::thread::sleep(std::time::Duration::from_millis(80));
             self.start_internal()?;
         }
@@ -146,6 +158,7 @@ impl RoutingEngine {
 
     /// Start routing according to the current graph.
     pub fn start(&self) -> Result<(), EngineError> {
+        let _restart = lock_recover(&self.restart_lock);
         if self.running.load(Ordering::SeqCst) {
             return Err(EngineError::AlreadyRunning);
         }
@@ -154,6 +167,7 @@ impl RoutingEngine {
 
     /// Stop all active routing.
     pub fn stop(&self) -> Result<(), EngineError> {
+        let _restart = lock_recover(&self.restart_lock);
         if !self.running.load(Ordering::SeqCst) {
             return Err(EngineError::NotRunning);
         }
