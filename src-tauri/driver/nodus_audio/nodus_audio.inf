@@ -1,69 +1,63 @@
-; nodus_audio.inf — Install the Nodus Virtual Audio driver (render endpoint)
-; Install: pnputil /add-driver nodus_audio.inf /install
-; Uninstall: pnputil /delete-driver nodus_audio.inf /uninstall /force
+; nodus_audio.inf - Nodus Virtual Audio (render endpoint: "Nodus Virtual Speaker")
+; Install: pnputil /add-driver nodus_audio.inf /install, then create the device node
+;          via hdwwiz (Have Disk) or devcon "ROOT\NodusVirtualAudio".
 
 [Version]
-Signature  = "$Windows NT$"
-Class      = MEDIA
-ClassGuid  = {4d36e96c-e325-11ce-bfc1-08002be10318}
-Provider   = %Provider%
-DriverVer  = 06/02/2026,1.0.0.1
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %Provider%
+DriverVer   = 06/03/2026,1.0.0.2
 CatalogFile = nodus_audio.cat
 PnpLockdown = 1
 
 [Manufacturer]
-%Provider% = Models, NTamd64
+%Provider% = Nodus, NTamd64
 
-[Models.NTamd64]
-%DeviceDesc% = NodusAudio_Install, ROOT\NodusVirtualAudio
-
-; ============================================================
-[NodusAudio_Install]
-Include    = ks.inf, wdmaudio.inf
-Needs      = KS.Registration, WDMAUDIO.Registration
-CopyFiles  = NodusAudio_CopyFiles
-AddReg     = NodusAudio_AddReg
-
-[NodusAudio_Install.Services]
-Include  = wdmaudio.inf
-Needs    = WDMAUDIO.Registration.Services
-AddService = NodusAudio, 0x00000002, NodusAudio_ServiceInstall
-
-[NodusAudio_Install.Interfaces]
-AddInterface = %KSCATEGORY_AUDIO%, %KSNAME_Wave%, NodusAudio_Interface_Wave
+[Nodus.NTamd64]
+%DeviceDesc% = NodusAudio, ROOT\NodusVirtualAudio
 
 ; ============================================================
-[NodusAudio_ServiceInstall]
-DisplayName   = %ServiceDesc%
-ServiceType   = 1                   ; SERVICE_KERNEL_DRIVER
-StartType     = 3                   ; SERVICE_DEMAND_START
-ErrorControl  = 0
-ServiceBinary = %12%\nodus_audio.sys
-LoadOrderGroup = Audio
+[NodusAudio.NT]
+Include   = ks.inf, wdmaudio.inf
+Needs     = KS.Registration, WDMAUDIO.Registration
+CopyFiles = NodusAudio.CopyFiles
 
-[NodusAudio_CopyFiles]
-nodus_audio.sys
+[NodusAudio.NT.Interfaces]
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_Wave%,     NodusAudio.I.Wave
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_Wave%,     NodusAudio.I.Wave
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_Wave%,     NodusAudio.I.Wave
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_Topology%, NodusAudio.I.Topo
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_Topology%, NodusAudio.I.Topo
 
-[NodusAudio_AddReg]
-; Friendly endpoint name shown in Windows Sound Settings
-HKR,, FriendlyName,, %DeviceDesc%
-HKR,, AssociatedFilters,, "ks"
-HKR,, Driver,, nodus_audio.sys
-
-; Register the audio device class
-HKLM, System\CurrentControlSet\Control\MediaCategories\%NODUS_GUID%,, , 0
-HKLM, System\CurrentControlSet\Control\MediaCategories\%NODUS_GUID%, Name, , %DeviceDesc%
-
-[NodusAudio_Interface_Wave]
-AddReg = NodusAudio_Interface_Wave_AddReg
-
-[NodusAudio_Interface_Wave_AddReg]
+[NodusAudio.I.Wave]
+AddReg = NodusAudio.I.Wave.AddReg
+[NodusAudio.I.Wave.AddReg]
+HKR,,FriendlyName,,%Wave.Desc%
 HKR,,CLSID,,%Proxy.CLSID%
-HKR,,FriendlyName,,%WaveDesc%
+
+[NodusAudio.I.Topo]
+AddReg = NodusAudio.I.Topo.AddReg
+[NodusAudio.I.Topo.AddReg]
+HKR,,FriendlyName,,%Topo.Desc%
+HKR,,CLSID,,%Proxy.CLSID%
+
+[NodusAudio.NT.Services]
+AddService = nodus_audio, 0x00000002, NodusAudio.Service
+
+[NodusAudio.Service]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1            ; SERVICE_KERNEL_DRIVER
+StartType     = 3            ; SERVICE_DEMAND_START
+ErrorControl  = 1
+ServiceBinary = %13%\nodus_audio.sys
+
+[NodusAudio.CopyFiles]
+nodus_audio.sys
 
 ; ============================================================
 [DestinationDirs]
-NodusAudio_CopyFiles = 12          ; \Windows\System32\drivers
+NodusAudio.CopyFiles = 13
 
 [SourceDisksNames]
 1 = %DiskName%
@@ -73,14 +67,17 @@ nodus_audio.sys = 1
 
 ; ============================================================
 [Strings]
-Provider    = "Nodus"
-DeviceDesc  = "Nodus Virtual Speaker"
-ServiceDesc = "Nodus Virtual Audio"
-WaveDesc    = "Nodus Virtual Speaker Wave"
-DiskName    = "Nodus Audio Driver Disk"
+Provider     = "Nodus"
+DeviceDesc   = "Nodus Virtual Audio"
+ServiceDesc  = "Nodus Virtual Audio Service"
+Wave.Desc    = "Nodus Virtual Speaker"
+Topo.Desc    = "Nodus Virtual Speaker Topology"
+DiskName     = "Nodus Audio Driver Disk"
 
-; GUIDs
-KSCATEGORY_AUDIO = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
-KSNAME_Wave      = "Wave"
-Proxy.CLSID      = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
-NODUS_GUID       = "{CF8D6B2A-F0E1-4A3C-8D9B-12345678ABCD}"
+Proxy.CLSID         = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO    = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER   = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSNAME_Wave         = "Wave"
+KSNAME_Topology     = "Topology"

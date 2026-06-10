@@ -1,89 +1,83 @@
-// INITGUID must be defined in exactly ONE translation unit before the headers
-// that declare the PortCls/KS GUIDs, so DEFINE_GUID emits their definitions
-// (otherwise CLSID_PortWaveRT / IID_IMiniport* are unresolved at link time).
+// INITGUID must precede the headers so DEFINE_GUID emits definitions for the
+// PortCls class IDs / interface IIDs referenced here and in the miniports.
 #define INITGUID
-#include <portcls.h>
-#include <stdunk.h>
-#include "miniport.h"
+#include "nodus.h"
+#include <ksmedia.h>
+#include "minwavert.h"
+#include "mintopo.h"
 
-// ---------------------------------------------------------------------------
-// GUIDs — generated once for Nodus Virtual Audio
-// ---------------------------------------------------------------------------
+typedef NTSTATUS (*PFN_CREATE_MINIPORT)(PUNKNOWN*, PUNKNOWN);
 
-// {CF8D6B2A-F0E1-4A3C-8D9B-12345678ABCD}
-DEFINE_GUID(CLSID_MiniportWaveRTNodus,
-    0xcf8d6b2a, 0xf0e1, 0x4a3c, 0x8d, 0x9b, 0x12, 0x34, 0x56, 0x78, 0xab, 0xcd);
-
-// Device interface GUID exposed by the adapter
-// {E7A3B5C1-2D4F-4E9A-B081-FEDCBA987654}
-DEFINE_GUID(GUID_NodusDeviceInterface,
-    0xe7a3b5c1, 0x2d4f, 0x4e9a, 0xb0, 0x81, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54);
-
-// ---------------------------------------------------------------------------
-// StartDevice — called by PortCls when PnP starts our device.
-// Creates one WaveRT port + our custom miniport and registers them.
-// ---------------------------------------------------------------------------
-NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
-                     PRESOURCELIST ResourceList)
+// Create a PortCls port of the given class, bind our miniport, register it as a
+// named subdevice, and hand the port back (referenced) for the physical connection.
+static NTSTATUS InstallSubdevice(
+    PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST ResourceList,
+    REFGUID PortClassId, PWSTR Name, PFN_CREATE_MINIPORT CreateMiniport,
+    PPORT* OutPort)
 {
-    UNREFERENCED_PARAMETER(Irp);
+    *OutPort = nullptr;
 
-    // Create the PortWaveRT
-    PPORTWAVERT pPort = nullptr;
-    NTSTATUS status = PcNewPort((PPORT*)&pPort, CLSID_PortWaveRT);
+    PPORT port = nullptr;
+    NTSTATUS status = PcNewPort(&port, PortClassId);
+    DbgPrint("Nodus: PcNewPort(%ws) status=0x%08X\n", Name, status);
     if (!NT_SUCCESS(status)) return status;
 
-    // Create our miniport. CUnknown starts at refcount 0, so we must take our own
-    // reference here (matching the PortCls/SYSVAD pattern). Init() AddRefs again;
-    // the Release() at the end then leaves exactly the port's reference. Without this
-    // AddRef the final Release frees the miniport while the port still uses it →
-    // use-after-free → BSOD in portcls.sys.
-    CMiniportWaveRT* pMiniport =
-        new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(nullptr);
-    if (!pMiniport) {
-        pPort->Release();
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    pMiniport->AddRef();
-
-    // Bind port to miniport
-    status = pPort->Init(DeviceObject, Irp, (PMINIPORT)pMiniport,
-                         nullptr, ResourceList);
-    if (!NT_SUCCESS(status)) {
-        pMiniport->Release();
-        pPort->Release();
-        return status;
+    PUNKNOWN miniport = nullptr;
+    status = CreateMiniport(&miniport, nullptr);   // refcount 1 (factory AddRef'd)
+    if (NT_SUCCESS(status)) {
+        status = port->Init(DeviceObject, Irp, miniport, nullptr, ResourceList);
+        DbgPrint("Nodus: port->Init(%ws) status=0x%08X\n", Name, status);
+        if (NT_SUCCESS(status)) {
+            status = PcRegisterSubdevice(DeviceObject, Name, port);
+            DbgPrint("Nodus: PcRegisterSubdevice(%ws) status=0x%08X\n", Name, status);
+        }
+        miniport->Release();   // port keeps its own reference via Init()
+    } else {
+        DbgPrint("Nodus: CreateMiniport(%ws) status=0x%08X\n", Name, status);
     }
 
-    // Register subdevice — this makes the endpoint visible to Windows audio
-    status = PcRegisterSubdevice(DeviceObject, L"Wave", pPort);
-
-    pMiniport->Release();
-    pPort->Release();
+    if (NT_SUCCESS(status)) {
+        *OutPort = port;       // caller releases after PcRegisterPhysicalConnection
+    } else {
+        port->Release();
+    }
     return status;
 }
 
-// ---------------------------------------------------------------------------
-// AddDevice — PnP framework calls this when it finds our hardware ID in INF.
-// We delegate to PortCls which manages device lifetime.
-// ---------------------------------------------------------------------------
-extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject,
-                               PDEVICE_OBJECT PhysicalDeviceObject)
+NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST ResourceList)
 {
-    return PcAddAdapterDevice(DriverObject, PhysicalDeviceObject,
-                              StartDevice,
-                              1,    // max subdevices (one "Wave" render endpoint)
-                              0);   // device extension size
+    DbgPrint("Nodus: StartDevice begin\n");
+
+    PPORT wavePort = nullptr, topoPort = nullptr;
+
+    NTSTATUS status = InstallSubdevice(DeviceObject, Irp, ResourceList,
+        CLSID_PortWaveRT, NODUS_WAVE_NAME, CreateMiniportWaveRTNodus, &wavePort);
+    if (!NT_SUCCESS(status)) return status;
+
+    status = InstallSubdevice(DeviceObject, Irp, ResourceList,
+        CLSID_PortTopology, NODUS_TOPO_NAME, CreateMiniportTopologyNodus, &topoPort);
+
+    if (NT_SUCCESS(status)) {
+        // Wire wave bridge pin (out) -> topology bridge pin (in). This connection is
+        // what lets MMDevAPI build the "Nodus Virtual Speaker" endpoint.
+        status = PcRegisterPhysicalConnection(DeviceObject,
+            wavePort, WAVE_PIN_BRIDGE, topoPort, TOPO_PIN_BRIDGE);
+        DbgPrint("Nodus: PcRegisterPhysicalConnection status=0x%08X\n", status);
+    }
+
+    if (topoPort) topoPort->Release();
+    if (wavePort) wavePort->Release();
+    DbgPrint("Nodus: StartDevice end status=0x%08X\n", status);
+    return status;
 }
 
-// ---------------------------------------------------------------------------
-// DriverEntry — kernel calls this when the driver is first loaded.
-// ---------------------------------------------------------------------------
-extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
-                                 PUNICODE_STRING RegistryPath)
+extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObject)
 {
-    // Let PortCls initialise the driver object (PnP/power callbacks etc.)
-    NTSTATUS status = PcInitializeAdapterDriver(DriverObject, RegistryPath,
-                                                (PDRIVER_ADD_DEVICE)AddDevice);
-    return status;
+    // Two subdevices: wave + topology.
+    return PcAddAdapterDevice(DriverObject, PhysicalDeviceObject, StartDevice, 2, 0);
+}
+
+extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
+{
+    return PcInitializeAdapterDriver(DriverObject, RegistryPath, (PDRIVER_ADD_DEVICE)AddDevice);
 }

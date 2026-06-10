@@ -71,14 +71,17 @@
 
   <ItemGroup>
     <ClCompile Include="adapter.cpp" />
-    <ClCompile Include="miniport.cpp" />
-    <ClCompile Include="stream.cpp" />
+    <ClCompile Include="minwavert.cpp" />
+    <ClCompile Include="minwavertstream.cpp" />
+    <ClCompile Include="mintopo.cpp" />
   </ItemGroup>
 
   <ItemGroup>
+    <ClInclude Include="nodus.h" />
+    <ClInclude Include="minwavert.h" />
+    <ClInclude Include="minwavertstream.h" />
+    <ClInclude Include="mintopo.h" />
     <ClInclude Include="common.h" />
-    <ClInclude Include="miniport.h" />
-    <ClInclude Include="stream.h" />
   </ItemGroup>
 
   <ItemGroup>
