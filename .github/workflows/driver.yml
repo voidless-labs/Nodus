@@ -188,6 +188,9 @@ jobs:
           Copy-Item "$pkg\nodus_audio.inf" out\ -Force
           Copy-Item "$pkg\nodus_audio.cat" out\ -Force
           Copy-Item "$pkg\nodus_test.cer" out\ -Force
+          # Include the PDB so a BSOD stack can be symbolized (nodus_audio.sys+offset).
+          $pdb = Get-ChildItem -Path $env:DRIVER_DIR -Recurse -Filter nodus_audio.pdb -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($pdb) { Copy-Item $pdb.FullName out\ -Force }
           Copy-Item "$env:DRIVER_DIR\install.ps1"   out\ -Force
           Copy-Item "$env:DRIVER_DIR\uninstall.ps1" out\ -Force
           Get-ChildItem out

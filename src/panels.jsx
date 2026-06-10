@@ -180,7 +180,7 @@ export function Library({ onCollapse, inputDevices = [], outputDevices = [], vir
 }
 
 /* ============================ INSPECTOR ============================ */
-export function Inspector({ node, edge, multi, nodes, edges, onCollapse, onRename, onVolume, onParam, onMute, onSolo, onDuplicate, onDelete, onDeleteEdge, onEdgeVol, onSelectNode, onAddPort, onRemovePort, onDeleteSelection, onMuteSelection, isPinned, onTogglePin }) {
+export function Inspector({ node, edge, multi, nodes, edges, onCollapse, onRename, onVolume, onParam, onMute, onSolo, onDuplicate, onDelete, onDeleteEdge, onEdgeVol, onEdgePan, onSelectNode, onAddPort, onRemovePort, onDeleteSelection, onMuteSelection, isPinned, onTogglePin }) {
   const head = (title, right) => h('div', { key: 'head', className: 'panel-head' }, [
     h('span', { key: 't', className: 'panel-title' }, title),
     h('span', { key: 'a', className: 'panel-head-actions' }, [
@@ -227,6 +227,16 @@ export function Inspector({ node, edge, multi, nodes, edges, onCollapse, onRenam
           h('div', { key: 'sf', className: 'slider-field' }, [
             h('div', { key: 'top', className: 'sf-top' }, [h('span', { key: 'l', className: 'sf-label' }, 'volume'), h('span', { key: 'v', className: 'sf-val' }, (edge.vol ?? 100) + '%')]),
             h('input', { key: 'r', type: 'range', className: 'range', min: 0, max: 100, value: edge.vol ?? 100, onChange: (e) => onEdgeVol(edge.id, +e.target.value) }),
+          ]),
+        ]),
+        h('div', { key: 'pan', className: 'insp-sec' }, [
+          h('div', { key: 't', className: 'insp-sec-title' }, 'Balance'),
+          h('div', { key: 'sf', className: 'slider-field' }, [
+            h('div', { key: 'top', className: 'sf-top' }, [
+              h('span', { key: 'l', className: 'sf-label' }, 'pan'),
+              h('span', { key: 'v', className: 'sf-val' }, (() => { const p = edge.pan ?? 0; return p === 0 ? 'C' : (p < 0 ? 'L' + (-p) : 'R' + p); })()),
+            ]),
+            h('input', { key: 'r', type: 'range', className: 'range', min: -100, max: 100, value: edge.pan ?? 0, onChange: (e) => onEdgePan(edge.id, +e.target.value) }),
           ]),
         ]),
         h('div', { key: 'a', className: 'insp-actions' }, h('div', { className: 'insp-btn danger', onClick: () => onDeleteEdge(edge.id) }, 'DELETE ROUTE')),

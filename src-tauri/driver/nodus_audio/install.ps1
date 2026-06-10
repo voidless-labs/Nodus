@@ -1,4 +1,4 @@
-# install.ps1 — Install the test-signed Nodus Virtual Audio driver.
+# install.ps1 - Install the test-signed Nodus Virtual Audio driver.
 # Run from an elevated PowerShell in the folder containing
 # nodus_audio.sys / .inf / .cat / nodus_test.cer (the CI artifact).
 #
@@ -7,6 +7,9 @@
 # Requires Test Mode for a test-signed driver:
 #   bcdedit /set testsigning on   (then reboot)
 # A release build signed with an EV / attestation cert does NOT need Test Mode.
+#
+# ASCII-only on purpose: avoids parser errors when the file is read under a
+# non-UTF8 console codepage (Windows PowerShell 5.1).
 
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
@@ -40,21 +43,28 @@ Write-Host "Adding driver package via pnputil..."
 pnputil /add-driver $inf /install
 if ($LASTEXITCODE -ne 0) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
 
-# 4 — Create the root-enumerated device node. pnputil cannot create a ROOT device,
-#     so we use devcon from the WDK if available.
-$devcon = Get-Command devcon.exe -ErrorAction SilentlyContinue
+# 4 - Create the root-enumerated device node. pnputil cannot create a ROOT device.
+#     Prefer devcon (WDK) if present; otherwise fall back to the built-in Add
+#     Hardware wizard (hdwwiz), which needs no extra tools on a clean machine.
+$devcon = (Get-Command devcon.exe -ErrorAction SilentlyContinue).Source
 if (-not $devcon) {
-    $candidates = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Tools" -Recurse -Filter devcon.exe -ErrorAction SilentlyContinue |
-                  Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1
-    if ($candidates) { $devcon = $candidates.FullName } else { $devcon = $null }
-} else { $devcon = $devcon.Source }
+    $devcon = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Tools" -Recurse -Filter devcon.exe -ErrorAction SilentlyContinue |
+               Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1).FullName
+}
 
 if ($devcon) {
-    Write-Host "Creating device node ROOT\NodusVirtualAudio..."
+    Write-Host "Creating device node ROOT\NodusVirtualAudio via devcon..."
     & $devcon install $inf "ROOT\NodusVirtualAudio"
     if ($LASTEXITCODE -ne 0) { throw "devcon install failed ($LASTEXITCODE)" }
-    Write-Host "`nDone. 'Nodus Virtual Speaker' should appear in Sound Settings → Output." -ForegroundColor Green
+    Write-Host "`nDone. 'Nodus Virtual Speaker' should appear in Sound Settings -> Output." -ForegroundColor Green
 } else {
-    Write-Warning "devcon.exe not found. The driver package is staged but the device node was not created."
-    Write-Warning "Install devcon (WDK) and run:  devcon install `"$inf`" `"ROOT\NodusVirtualAudio`""
+    Write-Warning "devcon.exe not found - the driver package is staged but no device node was created yet."
+    Write-Host    "Create the device with the built-in wizard (no extra tools needed):" -ForegroundColor Cyan
+    Write-Host    "  1. Run (admin):  hdwwiz"
+    Write-Host    "  2. Next -> 'Install the hardware that I manually select (Advanced)'"
+    Write-Host    "  3. 'Show All Devices' -> 'Have Disk...' -> browse to:"
+    Write-Host    "       $inf"
+    Write-Host    "  4. Select 'Nodus Virtual Speaker' -> Next -> Finish."
+    # Launch the wizard for convenience.
+    Start-Process hdwwiz.exe
 }

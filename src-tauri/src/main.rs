@@ -2,7 +2,7 @@
 // Pre-defined public API — suppressed until UI integration is complete.
 #![allow(dead_code)]
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nodus::commands::bridge::{DetectorState, EngineState};
 use nodus::detection::process::ProcessDetector;
@@ -20,7 +20,7 @@ fn main() {
     info!("Nodus starting up");
 
     tauri::Builder::default()
-        .manage(EngineState(Mutex::new(RoutingEngine::new())))
+        .manage(EngineState(Arc::new(RoutingEngine::new())))
         .manage(DetectorState(Mutex::new(ProcessDetector::new())))
         .invoke_handler(tauri::generate_handler![
             nodus::commands::bridge::get_audio_devices,
@@ -28,6 +28,7 @@ fn main() {
             nodus::commands::bridge::apply_routing_graph,
             nodus::commands::bridge::set_route_mute,
             nodus::commands::bridge::set_route_volume,
+            nodus::commands::bridge::set_route_pan,
             nodus::commands::bridge::start_engine,
             nodus::commands::bridge::stop_engine,
             nodus::commands::bridge::get_virtual_setup_status,

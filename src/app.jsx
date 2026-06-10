@@ -46,6 +46,11 @@ function buildRoutingGraph(nodes, edges) {
   const rustNodes = [];
   const rustRoutes = [];
 
+  // Effective mute = own mute OR (some node soloed AND this one isn't).
+  // Mirrors the visual simulation (App.effMuted) so Solo actually mutes routes in the engine.
+  const anySolo = Object.values(nodes).some(n => n.solo);
+  const effMuted = (n) => !!(n.muted || (anySolo && !n.solo && n.type !== 'trigger'));
+
   Object.values(nodes).forEach(n => {
     const nodeType = RUST_NODE_TYPE[n.type];
     if (!nodeType) return;
@@ -64,7 +69,8 @@ function buildRoutingGraph(nodes, edges) {
       from_node: e.from.node,
       to_node: e.to.node,
       volume: (e.vol ?? 100) / 100,
-      muted: !!(fn.muted || tn.muted),
+      muted: effMuted(fn) || effMuted(tn),
+      pan: (e.pan ?? 0) / 100,
     });
   });
 
@@ -354,7 +360,10 @@ export default function App() {
     applyGraphLater();
   };
 
-  const soloNode = (id) => setNodes(n => ({ ...n, [id]: { ...n[id], solo: !n[id].solo } }));
+  const soloNode = (id) => {
+    setNodes(n => ({ ...n, [id]: { ...n[id], solo: !n[id].solo } }));
+    applyGraphLater(); // solo changes effective mute of other routes → push to engine
+  };
   const setVolume = (id, v) => setNodes(n => ({ ...n, [id]: { ...n[id], volume: v } }));
   const rename = (id, name) => setNodes(n => ({ ...n, [id]: { ...n[id], name } }));
   const setParam = (id, k, v) => setNodes(n => ({ ...n, [id]: { ...n[id], params: { ...n[id].params, [k]: v } } }));
@@ -362,6 +371,12 @@ export default function App() {
   const setEdgeVol = (id, v) => {
     setEdges(es => es.map(e => e.id === id ? { ...e, vol: v } : e));
     if (liveRef.current) Bridge.setRouteVolume(id, v / 100).catch(console.error);
+  };
+
+  // Stereo balance per route. UI stores -100..100 (center 0); engine takes -1..1.
+  const setEdgePan = (id, p) => {
+    setEdges(es => es.map(e => e.id === id ? { ...e, pan: p } : e));
+    if (liveRef.current) Bridge.setRoutePan(id, p / 100).catch(console.error);
   };
 
   const deleteNode = (id) => {
@@ -582,7 +597,7 @@ export default function App() {
             node: selNode, edge: selEdge, multi: multiNodes, nodes, edges,
             onCollapse: () => setUi(u => ({ ...u, insp: false, inspAuto: false })),
             onRename: rename, onVolume: setVolume, onParam: setParam, onMute: muteNode, onSolo: soloNode,
-            onDuplicate: duplicateNode, onDelete: deleteNode, onDeleteEdge: deleteEdge, onEdgeVol: setEdgeVol,
+            onDuplicate: duplicateNode, onDelete: deleteNode, onDeleteEdge: deleteEdge, onEdgeVol: setEdgeVol, onEdgePan: setEdgePan,
             onSelectNode: selectNode, onAddPort: addPort, onRemovePort: removePort,
             onDeleteSelection: deleteSelection, onMuteSelection: muteSelection,
             isPinned: selNode ? (scene.pinned || []).includes(selNode.id) : false, onTogglePin: togglePin,

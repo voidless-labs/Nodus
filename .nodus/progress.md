@@ -90,12 +90,27 @@ VU-цикл (bridge.rs, 33мс) брал блокирующий `lock`, конк
 
 ## Цикл ремонта 2 (02.06.2026) — снятие блокера #1 (виртуальное устройство)
 
-### ✅ FIX-004 — CI для сборки/подписи драйвера
-Создан `.github/workflows/driver.yml`: EWDK (mount ISO) → msbuild nodus_audio.vcxproj
-→ self-signed test cert → signtool .sys → inf2cat → signtool .cat → upload артефакта
-(.sys/.inf/.cat/.cer + install/uninstall.ps1). EWDK ISO URL задаётся repo-переменной
-`EWDK_ISO_URL` (Microsoft гейтит, hard-code невозможен).
-⚠️ Не проверено в реальном Actions-run — нужен запуск с настроенной EWDK_ISO_URL.
+### ✅ FIX-004 — CI для сборки/подписи драйвера — РАБОТАЕТ (02.06.2026)
+`.github/workflows/driver.yml`: EWDK (mount ISO ~19 ГБ) → msbuild nodus_audio.vcxproj
+→ self-signed test cert → signtool .sys → inf2cat (clean staging dir) → signtool .cat
+→ upload артефакта (.sys/.inf/.cat/.cer + install/uninstall.ps1).
+EWDK ISO URL = repo-переменная `EWDK_ISO_URL` (использован fwlink на EWDK build 28000).
+✅ Прогон в реальном GitHub Actions ЗЕЛЁНЫЙ — артефакт nodus_audio-driver-x64-Release собирается.
+
+Что пришлось чинить по ходу реальных прогонов (драйвер ни разу не собирался ранее):
+- vcxproj: старый WDK 8.x формат → современный (Microsoft.Cpp.* + WindowsKernelModeDriver10.0);
+  CI определяет версию kit и передаёт /p:WindowsTargetPlatformVersion.
+- C++ ошибки PortCls: дубль NonDelegatingQueryInterface (DECLARE_STD_UNKNOWN), сигнатура
+  NewStream, AllocateAudioBuffer/FreeAudioBuffer/GetHWLatency, поля PCPIN/PCFILTER дескрипторов,
+  MAX_MINIPORTS→1, NonPagedPool→NonPagedPoolNx.
+- Линковка: добавлен stdunk.lib (CUnknown), INITGUID в adapter.cpp (GUID'ы portcls).
+- vcxproj: убран лишний _KERNEL_MODE (C4117), /WX off, SignMode=Off, EnableInf2Cat=false
+  (встроенный inf2cat падал с пустым Configuration).
+- inf: канонические SourceDisksNames/Files.
+- CI: inf2cat в чистой staging-папке (только inf+sys); retry на букву диска после Mount-DiskImage.
+
+⏳ Дальше (только на реальной машine): скачать артефакт → Test Mode → install.ps1 →
+проверить «Nodus Virtual Speaker» в Sound Settings → ring-путь end-to-end.
 
 ### ✅ FIX-005 — Скрипты установки драйвера
 `install.ps1` (импорт cert в Root+TrustedPublisher, проверка Test Mode,
@@ -108,6 +123,102 @@ pnputil /add-driver, devcon install ROOT\NodusVirtualAudio) и `uninstall.ps1`.
 loopback (виртуальный спикер — реальный render-endpoint). Проброшен флаг
 `from_is_virtual` через ActiveRoute/resolve. 33 теста зелёные, cargo check бинарей ок.
 ⚠️ Реальная работа ring-пути проверяется только с загруженным драйвером.
+
+## Цикл ремонта 3 (03.06.2026) — изоляция звука приложений (#2 + #4)
+
+### ✅ FIX-007 — WASAPI process loopback (per-app capture)
+Источник-приложение больше НЕ снимает весь микс устройства. Добавлен
+`ProcessLoopbackCapture` (session.rs) через `ActivateAudioInterfaceAsync` +
+`AUDIOCLIENT_ACTIVATION_PARAMS` (PROCESS_LOOPBACK, INCLUDE_TARGET_PROCESS_TREE,
+Win10 20348+). Захватывается только дерево процессов целевого PID.
+- `find_audio_pid_for_exe()` — находит PID с активной аудио-сессией.
+- Движок: `CaptureSource::ProcessLoopback`; для exe-источников выбирается process
+  loopback (ключ `exe:<name>` для splitter fanout), для virtual — ring, иначе device loopback.
+- Формат захвата = наш нормализованный (48k/2ch/f32): Windows ресэмплит звук приложения
+  в него → попутно снимает часть проблемы #5 для app-источников.
+- COM-хендлер завершения активации через `#[windows::core::implement]`
+  (добавлены feature `implement` и крейт `windows-core`).
+
+### ✅ FIX-008 — Per-route mute/volume больше не глушит приложение глобально (#4)
+Убран весь `AppSessionControl`-плумбинг из движка (поля app_session в RouteHandles/
+CaptureHandle, ветки в set_route_mute/volume). Теперь mute/volume применяются ТОЛЬКО к
+нашей захваченной копии (атомики рендерера), не к Windows-сессии приложения. Это
+корректный per-route: «Arma→OBS active, Arma→Headphones muted» больше не глушит Arma целиком.
+
+Проверено: cargo build (lib+bins) ✅, 33 теста ✅, clippy без новых warning.
+⚠️ Реальная работа process loopback (захват именно нужного PID, отсутствие тишины при
+polling) проверяется только на реальной машине с воспроизводящимся приложением.
+
+## Цикл ремонта 4 (03.06.2026) — формат capture↔render (#5)
+
+### ✅ FIX-009 — Реальный формат захвата прокидывается в рендерер
+Device-loopback отдаёт кадры в mix-формате устройства (его каналы/частота, всегда
+f32), а рендерер раньше трактовал их как 48k/2ch → разъезд каналов + сдвиг скорости.
+- `get_device_capture_format(device_id)` (session.rs): для render-endpoint — реальный
+  GetMixFormat (rate/channels, 32-bit), для input — наш дефолт (там AUTOCONVERTPCM).
+- `CaptureHandle.format` хранит реальный формат источника; рендерер инициализируется
+  им + AUTOCONVERTPCM → Windows сам ремиксит/ресэмплит source→output device.
+- Process loopback / virtual ring используют наш дефолт (они и так в нём).
+Проверено: cargo build (lib) ✅, 33 теста ✅, clippy без новых warning.
+⚠️ Слух/качество — на реальной машине.
+
+## Цикл ремонта 5 (03.06.2026) — #6 + #9 (завершение код-аудита)
+
+### ✅ FIX-010 — apply_graph больше не фризит UI (#6)
+Раньше `apply_routing_graph` держал внешний `Mutex<RoutingEngine>` всё время рестарта
+(stop + sleep 80мс + start) и блокировал async-воркер tokio → подвисал слайдер громкости/mute.
+- `RoutingEngine` уже потокобезопасен внутри (Arc<Mutex<…>> поля + атомики) → внешний
+  `Mutex<RoutingEngine>` убран; `EngineState(pub Arc<RoutingEngine>)`.
+- Добавлен отдельный `restart_lock: Mutex<()>` — сериализует только рестарты
+  (apply/start/stop), его НЕ берут set_route_volume/mute → real-time контролы отзывчивы.
+- Команды apply/start/stop вынесены в `tokio::task::spawn_blocking` (80мс не блокируют рантайм).
+- VU-поток читает движок без лока (`is_running`/`get_source_levels` напрямую).
+- main.rs: `EngineState(Arc::new(...))`.
+
+### ✅ FIX-011 — Валидация графа (#9)
+`Graph::apply_snapshot` теперь `-> Result`: отклоняет графы с циклом (DFS 3-colour,
+`GraphError::CycleDetected`) ДО мутации (битый снапшот не портит текущий граф), и
+выбрасывает дубликаты рёбер и рёбра к несуществующим нодам. +2 теста.
+
+Проверено: cargo build (lib+bins) ✅, 35 тестов ✅, clippy чисто.
+
+## Phase 2 — мелкие пункты (03.06.2026)
+
+Аудит фактического UI-кода (память была устаревшей):
+- **VU-метры в UI** — ✅ уже сделано разработчиком: app.jsx слушает `volume-levels`,
+  мапит device_id/exe_name → ноды, canvas рисует meter-fill. Ничего не требовалось.
+- **Save/Load JSON** — ✅ уже сделано: doExport/doImport (Blob download + file input)
+  сохраняют все сцены. Работает и в Tauri.
+- **Pan-слайдер** — в текущем UI ОТСУТСТВУЕТ (визуала нет). Создавать UI — зона разработчика.
+- **audio-props "48000 Hz · 512 samples"** — в текущем UI уже НЕТ захардкоженной строки.
+
+### ✅ FIX-012 — Solo доходит до backend
+Был реальный пробел: `soloNode` менял только визуал, а `buildRoutingGraph` брал сырой
+`node.muted` без учёта solo. Теперь:
+- `buildRoutingGraph` считает effective mute с учётом solo (зеркалит App.effMuted):
+  `muted = effMuted(fn) || effMuted(tn)`.
+- `soloNode` вызывает `applyGraphLater()` → изменение solo пушится в движок.
+Чистая логика интеграции (UI↔Rust), визуал не тронут. `npm run build` ✅.
+
+ℹ️ Замечено (не в запросе): громкость НОДЫ (слайдер volume на ноде) — визуал-онли,
+в backend идёт только громкость рёбер (set_route_volume). Можно подключить отдельно.
+
+## Pan-слайдер (03.06.2026) — фича на весь стек
+
+Правило обновлено: изменения UI разрешены с явного согласия пользователя (CLAUDE.md #1).
+Пользователь дал согласие на Pan → создан недостающий UI.
+
+### ✅ FIX-013 — Stereo balance (pan) per route
+- node.rs: `Route.pan: f32` [-1..1], serde default 0.
+- graph.rs: `set_pan` (clamp), `ActiveRoute.pan` (берёт pan финального ребра).
+- session.rs: `AudioRenderer` применяет balance на стерео-кадрах (pan<0 глушит правый,
+  pan>0 — левый); для не-2ch игнор. Атомик pan шарится с render-потоком.
+- engine.rs: `RouteHandles.pan`, `set_route_pan` (real-time), проброс в рендерер.
+- bridge.rs: команда `set_route_pan`; main.rs зарегистрирована (теперь 11 команд).
+- UI (с согласия): tauri-bridge `setRoutePan`; app.jsx `setEdgePan` + pan в buildRoutingGraph;
+  panels.jsx — слайдер «Balance» (-100..100, L/C/R) в инспекторе ребра (те же CSS-классы).
+Проверено: cargo build (lib+bins) ✅, 35 тестов ✅, npm run build ✅, clippy чисто.
+⚠️ Звук/баланс — на реальной машине.
 
 ## Что осталось до полного MVP
 

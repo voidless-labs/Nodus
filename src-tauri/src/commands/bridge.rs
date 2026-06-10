@@ -5,7 +5,10 @@
 /// - State lives in tauri::State wrappers, registered in main.rs
 /// - Events are emitted on the AppHandle
 
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use tauri::{AppHandle, Manager, State};
 use tracing::{error, info};
@@ -22,7 +25,10 @@ use crate::{
 
 // ── Shared state ──────────────────────────────────────────────────────────
 
-pub struct EngineState(pub Mutex<RoutingEngine>);
+// RoutingEngine is internally synchronized (Arc<Mutex<…>> fields + atomics), so it
+// needs no outer Mutex. Sharing it via Arc lets commands run concurrently and lets
+// slow operations move onto a blocking thread without holding a global engine lock.
+pub struct EngineState(pub Arc<RoutingEngine>);
 pub struct DetectorState(pub Mutex<ProcessDetector>);
 
 // ── Device commands ────────────────────────────────────────────────────────
@@ -86,68 +92,67 @@ pub async fn get_running_audio_processes() -> Result<Vec<AudioProcess>, String> 
 // ── Routing commands ───────────────────────────────────────────────────────
 
 /// Replace the entire routing graph and restart routing if engine is running.
+/// Runs on a blocking thread: the restart settles WASAPI over ~80ms and must not
+/// block the async runtime. Per-route volume/mute stay responsive meanwhile.
 #[tauri::command]
 pub async fn apply_routing_graph(
     graph: RoutingGraph,
     engine: State<'_, EngineState>,
 ) -> Result<(), String> {
-    engine
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .apply_graph(graph)
+    let engine = Arc::clone(&engine.0);
+    tokio::task::spawn_blocking(move || engine.apply_graph(graph))
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
-/// Mute or unmute a specific route (edge) without restarting.
+/// Mute or unmute a specific route (edge) without restarting. Fast, lock-free hot path.
 #[tauri::command]
 pub async fn set_route_mute(
     route_id: RouteId,
     muted: bool,
     engine: State<'_, EngineState>,
 ) -> Result<(), String> {
-    engine
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .set_route_mute(&route_id, muted)
-        .map_err(|e| e.to_string())
+    engine.0.set_route_mute(&route_id, muted).map_err(|e| e.to_string())
 }
 
-/// Set volume [0.0 .. 1.0] on a specific route without restarting.
+/// Set volume [0.0 .. 1.0] on a specific route without restarting. Fast, lock-free hot path.
 #[tauri::command]
 pub async fn set_route_volume(
     route_id: RouteId,
     volume: f32,
     engine: State<'_, EngineState>,
 ) -> Result<(), String> {
-    engine
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .set_route_volume(&route_id, volume)
-        .map_err(|e| e.to_string())
+    engine.0.set_route_volume(&route_id, volume).map_err(|e| e.to_string())
 }
 
-/// Start the routing engine.
+/// Set stereo balance [-1.0 .. 1.0] on a specific route without restarting.
+#[tauri::command]
+pub async fn set_route_pan(
+    route_id: RouteId,
+    pan: f32,
+    engine: State<'_, EngineState>,
+) -> Result<(), String> {
+    engine.0.set_route_pan(&route_id, pan).map_err(|e| e.to_string())
+}
+
+/// Start the routing engine (WASAPI setup → blocking thread).
 #[tauri::command]
 pub async fn start_engine(engine: State<'_, EngineState>) -> Result<(), String> {
-    engine
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .start()
+    let engine = Arc::clone(&engine.0);
+    tokio::task::spawn_blocking(move || engine.start())
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
-/// Stop the routing engine.
+/// Stop the routing engine (WASAPI teardown → blocking thread).
 #[tauri::command]
 pub async fn stop_engine(engine: State<'_, EngineState>) -> Result<(), String> {
-    engine
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .stop()
+    let engine = Arc::clone(&engine.0);
+    tokio::task::spawn_blocking(move || engine.stop())
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
@@ -197,14 +202,12 @@ pub fn setup_background_tasks(handle: AppHandle) {
         loop {
             std::thread::sleep(Duration::from_millis(33));
             let engine = handle_levels.state::<EngineState>();
-            // try_lock: never block this 30fps poll on the engine mutex. A graph
-            // apply (which holds the lock across a restart + sleep) or a real-time
-            // volume command would otherwise stall the VU meter. Skip this frame
-            // if the lock is contended — the next tick (33ms later) will catch up.
-            let levels = match engine.0.try_lock() {
-                Ok(guard) if guard.is_running() => guard.get_source_levels(),
-                _ => continue,
-            };
+            // Engine is lock-free to query now; get_source_levels takes only the
+            // short-lived internal captures lock.
+            if !engine.0.is_running() {
+                continue;
+            }
+            let levels = engine.0.get_source_levels();
             if !levels.is_empty() {
                 if let Ok(payload) = serde_json::to_value(&levels) {
                     let _ = handle_levels.emit_all("volume-levels", payload);
