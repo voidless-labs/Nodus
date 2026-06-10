@@ -28,11 +28,15 @@ on:
         required: false
         type: string
   push:
+    # NOTE: a tags-only filter (no branches) disables branch-push triggers entirely,
+    # so branches must be listed explicitly alongside tags.
+    branches:
+      - "**"
+    tags:
+      - "driver-v*"
     paths:
       - "src-tauri/driver/**"
       - ".github/workflows/driver.yml"
-    tags:
-      - "driver-v*"
 
 env:
   DRIVER_DIR: src-tauri/driver/nodus_audio

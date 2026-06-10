@@ -44,6 +44,13 @@ static PCCONNECTION_DESCRIPTOR TopoConnections[] = {
     { PCFILTER_NODE, TOPO_PIN_BRIDGE, PCFILTER_NODE, TOPO_PIN_SPEAKER }
 };
 
+// PortCls registers/enables a device interface per category listed HERE; the
+// INF AddInterface lines only seed FriendlyName/CLSID under those interfaces.
+static GUID TopoCategories[] = {
+    { STATIC_KSCATEGORY_AUDIO },
+    { STATIC_KSCATEGORY_TOPOLOGY }
+};
+
 static PCFILTER_DESCRIPTOR TopoFilterDescriptor = {
     0,                                      // Version
     nullptr,                                // AutomationTable
@@ -51,7 +58,7 @@ static PCFILTER_DESCRIPTOR TopoFilterDescriptor = {
     SIZEOF_ARRAY(TopoPins), TopoPins,       // PinCount, Pins
     sizeof(PCNODE_DESCRIPTOR), 0, nullptr,  // NodeSize, NodeCount, Nodes
     SIZEOF_ARRAY(TopoConnections), TopoConnections, // ConnectionCount, Connections
-    0, nullptr                              // CategoryCount, Categories
+    SIZEOF_ARRAY(TopoCategories), TopoCategories    // CategoryCount, Categories
 };
 
 // ── IUnknown ────────────────────────────────────────────────────────────────

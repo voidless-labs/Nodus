@@ -52,12 +52,21 @@ static PCCONNECTION_DESCRIPTOR WaveConnections[] = {
     { PCFILTER_NODE, WAVE_PIN_HOST, PCFILTER_NODE, WAVE_PIN_BRIDGE }
 };
 
+// PortCls registers/enables a device interface per category listed HERE; the
+// INF AddInterface lines only seed FriendlyName/CLSID under those interfaces.
+// Without these categories MMDevAPI never sees the filter and no endpoint is built.
+static GUID WaveCategories[] = {
+    { STATIC_KSCATEGORY_AUDIO },
+    { STATIC_KSCATEGORY_RENDER },
+    { STATIC_KSCATEGORY_REALTIME }
+};
+
 static PCFILTER_DESCRIPTOR WaveFilterDescriptor = {
     0, nullptr,
     sizeof(PCPIN_DESCRIPTOR), SIZEOF_ARRAY(WavePins), WavePins,
     sizeof(PCNODE_DESCRIPTOR), 0, nullptr,
     SIZEOF_ARRAY(WaveConnections), WaveConnections,
-    0, nullptr
+    SIZEOF_ARRAY(WaveCategories), WaveCategories
 };
 
 // ── IUnknown ────────────────────────────────────────────────────────────────
