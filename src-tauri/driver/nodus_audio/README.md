@@ -41,7 +41,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 `install.ps1` trusts the test cert, stages the driver (`pnputil`), and creates the
-`ROOT\NodusVirtualAudio` device node (`devcon`). Uninstall with `uninstall.ps1`.
+`ROOT\NodusVirtualAudio` device node — via `devcon` if present, otherwise it launches
+the built-in **Add Hardware wizard** (`hdwwiz`) so no WDK tools are needed on a clean
+test machine (pick "Have Disk" → `nodus_audio.inf` → "Nodus Virtual Speaker").
+Uninstall with `uninstall.ps1`.
 
 ---
 
