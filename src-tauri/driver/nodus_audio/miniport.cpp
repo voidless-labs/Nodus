@@ -111,7 +111,9 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(
     m_pPort = Port;
     m_pPort->AddRef();
 
-    return CreateSharedSection();
+    NTSTATUS status = CreateSharedSection();
+    DbgPrint("Nodus: Miniport::Init -> CreateSharedSection status=0x%08X\n", status);
+    return status;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,8 +158,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDeviceDescription(
 // ---------------------------------------------------------------------------
 CMiniportWaveRT::~CMiniportWaveRT()
 {
+    DbgPrint("Nodus: ~CMiniportWaveRT\n");
     if (m_pShared) {
-        MmUnmapLockedPages(m_pShared, nullptr);
+        // m_pShared was mapped with ZwMapViewOfSection, so it MUST be released with
+        // ZwUnmapViewOfSection (not MmUnmapLockedPages, which expects an MDL and
+        // crashed on the NULL we passed).
+        ZwUnmapViewOfSection(ZwCurrentProcess(), m_pShared);
         m_pShared = nullptr;
     }
     if (m_hSection) {
@@ -190,6 +196,7 @@ NTSTATUS CMiniportWaveRT::CreateSharedSection()
     NTSTATUS status = ZwCreateSection(&m_hSection,
         SECTION_ALL_ACCESS, &oa, &size,
         PAGE_READWRITE, SEC_COMMIT, nullptr);
+    DbgPrint("Nodus: ZwCreateSection status=0x%08X\n", status);
     if (!NT_SUCCESS(status)) return status;
 
     // Map into system address space so the driver can write to it.
@@ -197,6 +204,7 @@ NTSTATUS CMiniportWaveRT::CreateSharedSection()
     status = ZwMapViewOfSection(m_hSection, ZwCurrentProcess(),
         (PVOID*)&m_pShared, 0, sizeof(NODUS_RING_BUFFER),
         nullptr, &viewSize, ViewUnmap, 0, PAGE_READWRITE);
+    DbgPrint("Nodus: ZwMapViewOfSection status=0x%08X ptr=%p\n", status, m_pShared);
     if (!NT_SUCCESS(status)) return status;
 
     // Initialise header

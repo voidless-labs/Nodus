@@ -27,10 +27,12 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                      PRESOURCELIST ResourceList)
 {
     UNREFERENCED_PARAMETER(Irp);
+    DbgPrint("Nodus: StartDevice begin\n");
 
     // Create the PortWaveRT
     PPORTWAVERT pPort = nullptr;
     NTSTATUS status = PcNewPort((PPORT*)&pPort, CLSID_PortWaveRT);
+    DbgPrint("Nodus: PcNewPort status=0x%08X\n", status);
     if (!NT_SUCCESS(status)) return status;
 
     // Create our miniport. CUnknown starts at refcount 0, so we must take our own
@@ -49,6 +51,7 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     // Bind port to miniport
     status = pPort->Init(DeviceObject, Irp, (PMINIPORT)pMiniport,
                          nullptr, ResourceList);
+    DbgPrint("Nodus: pPort->Init status=0x%08X\n", status);
     if (!NT_SUCCESS(status)) {
         pMiniport->Release();
         pPort->Release();
@@ -57,9 +60,11 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     // Register subdevice — this makes the endpoint visible to Windows audio
     status = PcRegisterSubdevice(DeviceObject, L"Wave", pPort);
+    DbgPrint("Nodus: PcRegisterSubdevice status=0x%08X\n", status);
 
     pMiniport->Release();
     pPort->Release();
+    DbgPrint("Nodus: StartDevice end status=0x%08X\n", status);
     return status;
 }
 
