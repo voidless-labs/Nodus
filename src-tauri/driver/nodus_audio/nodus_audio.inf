@@ -12,9 +12,10 @@ CatalogFile = nodus_audio.cat
 PnpLockdown = 1
 
 [Manufacturer]
-%Provider% = Nodus, NTamd64
+; 10.0...16299 (Win10 1709) minimum: DIRID 13 (driver-store CopyFiles) requires it (InfVerif 1199).
+%Provider% = Nodus, NTamd64.10.0...16299
 
-[Nodus.NTamd64]
+[Nodus.NTamd64.10.0...16299]
 %DeviceDesc% = NodusAudio, ROOT\NodusVirtualAudio
 
 ; ============================================================
