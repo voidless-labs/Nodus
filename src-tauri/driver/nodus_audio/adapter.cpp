@@ -33,13 +33,18 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     NTSTATUS status = PcNewPort((PPORT*)&pPort, CLSID_PortWaveRT);
     if (!NT_SUCCESS(status)) return status;
 
-    // Create our miniport
+    // Create our miniport. CUnknown starts at refcount 0, so we must take our own
+    // reference here (matching the PortCls/SYSVAD pattern). Init() AddRefs again;
+    // the Release() at the end then leaves exactly the port's reference. Without this
+    // AddRef the final Release frees the miniport while the port still uses it →
+    // use-after-free → BSOD in portcls.sys.
     CMiniportWaveRT* pMiniport =
         new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(nullptr);
     if (!pMiniport) {
         pPort->Release();
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    pMiniport->AddRef();
 
     // Bind port to miniport
     status = pPort->Init(DeviceObject, Irp, (PMINIPORT)pMiniport,
