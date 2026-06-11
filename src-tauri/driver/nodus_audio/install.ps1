@@ -49,10 +49,32 @@ function Get-InstalledPackages {
         Where-Object { $_.OriginalFileName -like '*nodus_audio.inf' })
 }
 
+function Get-NodusDevice {
+    return (Get-PnpDevice -ErrorAction SilentlyContinue |
+        Where-Object { $_.HardwareID -contains $hwid } | Select-Object -First 1)
+}
+
 function Test-DevicePresent {
-    $dev = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-        Where-Object { $_.HardwareID -contains $hwid }
-    return [bool]$dev
+    return [bool](Get-NodusDevice)
+}
+
+# Brings the device to a running state (it may be left disabled by an
+# interrupted update). Returns $true when Status ends up OK.
+function Repair-DeviceState {
+    $dev = Get-NodusDevice
+    if (-not $dev) { return $false }
+    for ($i = 0; $i -lt 3; $i++) {
+        $dev = Get-PnpDevice -InstanceId $dev.InstanceId
+        if ($dev.Status -eq 'OK') { return $true }
+        if ("$($dev.Problem)" -eq 'CM_PROB_DISABLED') {
+            Write-Host "Device is disabled - enabling..."
+            try { $dev | Enable-PnpDevice -Confirm:$false -ErrorAction Stop } catch {
+                Write-Warning "Enable-PnpDevice: $_"
+            }
+        }
+        Start-Sleep -Seconds 2
+    }
+    return ((Get-PnpDevice -InstanceId $dev.InstanceId).Status -eq 'OK')
 }
 
 function Find-Devcon {
@@ -98,10 +120,14 @@ Write-Host "Package version  : $pkgVer"
 Write-Host ("Installed version: " + $(if ($instVer) { "$instVer" } else { "(not installed)" }))
 
 if ($instVer -and -not $Force -and $pkgVer -le $instVer) {
-    Write-Host "Installed driver is already up to date - nothing to do." -ForegroundColor Green
+    Write-Host "Installed driver is already up to date." -ForegroundColor Green
     if (-not (Test-DevicePresent)) {
         Write-Host "Device node is missing though - creating it..."
         New-DeviceNode
+    } elseif (-not (Repair-DeviceState)) {
+        Write-Warning "Device is present but not running - a reboot may be required."
+    } else {
+        Write-Host "Device is running - nothing to do." -ForegroundColor Green
     }
     return
 }
@@ -155,14 +181,19 @@ if (Test-DevicePresent) {
     } else {
         Write-Host "Restarting the device so the new driver binary actually loads..."
         try {
-            $dev = Get-PnpDevice -PresentOnly -ErrorAction Stop |
-                Where-Object { $_.HardwareID -contains $hwid }
+            $dev = Get-NodusDevice
             $dev | Disable-PnpDevice -Confirm:$false -ErrorAction Stop
             Start-Sleep -Seconds 1
-            $dev | Enable-PnpDevice -Confirm:$false -ErrorAction Stop
-            Write-Host "Device restarted."
+            $dev | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue
         } catch {
             Write-Warning "Device restart failed ($_)."
+        }
+        # Verify it actually came back up; Enable can fail transiently right
+        # after Disable, so Repair-DeviceState retries before giving up.
+        if (Repair-DeviceState) {
+            Write-Host "Device restarted."
+        } else {
+            Write-Warning "Device did not come back up after the restart."
             Write-Warning "Reboot to finish switching to the new driver version."
             $rebootNeeded = $true
         }
@@ -172,8 +203,16 @@ if (Test-DevicePresent) {
 }
 
 # 5 - Clean up older staged copies of our package (keeps the driver store tidy).
+#     NEVER delete the package the device is currently bound to: /force-deleting
+#     it strips the driver off the device and the endpoint disappears.
+$boundInf = $null
+$dev = Get-NodusDevice
+if ($dev) {
+    $boundInf = (Get-PnpDeviceProperty -InstanceId $dev.InstanceId `
+        -KeyName DEVPKEY_Device_DriverInfPath -ErrorAction SilentlyContinue).Data
+}
 foreach ($p in (Get-InstalledPackages)) {
-    if ([version]$p.Version -lt $pkgVer) {
+    if ([version]$p.Version -lt $pkgVer -and $p.Driver -ne $boundInf) {
         Write-Host "Removing older staged package $($p.Driver) (v$($p.Version))..."
         pnputil /delete-driver $p.Driver /force | Out-Null
     }
