@@ -140,8 +140,9 @@ if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
     throw "pnputil /add-driver failed ($LASTEXITCODE)"
 }
 
-# 4 - Make sure the device node exists; on update give the device a nudge so it
-#     rebinds to the new driver without waiting for a reboot (when possible).
+# 4 - Make sure the device node exists. On update the device must be RESTARTED:
+#     a running .sys is never swapped in place, so without a restart the old
+#     binary keeps running even though the bound version looks new.
 if (Test-DevicePresent) {
     $devcon = Find-Devcon
     if ($devcon) {
@@ -152,7 +153,19 @@ if (Test-DevicePresent) {
             $rebootNeeded = $true
         }
     } else {
-        pnputil /scan-devices | Out-Null
+        Write-Host "Restarting the device so the new driver binary actually loads..."
+        try {
+            $dev = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+                Where-Object { $_.HardwareID -contains $hwid }
+            $dev | Disable-PnpDevice -Confirm:$false -ErrorAction Stop
+            Start-Sleep -Seconds 1
+            $dev | Enable-PnpDevice -Confirm:$false -ErrorAction Stop
+            Write-Host "Device restarted."
+        } catch {
+            Write-Warning "Device restart failed ($_)."
+            Write-Warning "Reboot to finish switching to the new driver version."
+            $rebootNeeded = $true
+        }
     }
 } else {
     New-DeviceNode

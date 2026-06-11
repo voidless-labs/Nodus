@@ -12,12 +12,19 @@ public:
     CMiniportWaveRT(PUNKNOWN outer) : CUnknown(outer), m_Port(nullptr), m_Writer(nullptr)
     {
         RtlZeroMemory(&m_Ring, sizeof(m_Ring));
+        KeInitializeMutex(&m_RingLock, 0);
     }
     ~CMiniportWaveRT();
 
     IMP_IMiniportWaveRT;   // Init / NewStream / GetDeviceDescription / GetDescription / DataRangeIntersection
 
     NODUS_RING_BUFFER* Ring() const { return m_Ring.Header; }
+
+    // Lazily create the named ring section (PASSIVE_LEVEL only). A root-enumerated
+    // device starts during early boot BEFORE smss creates \BaseNamedObjects, so
+    // creating the section in Init() fails there with PATH_NOT_FOUND. NewStream
+    // (audiodg, always post-logon) is the reliable moment; retried until it works.
+    VOID EnsureRing();
 
     // Single-writer arbitration: audiodg normally opens one render stream, but
     // during device transitions two can briefly coexist — only the claimant
@@ -35,5 +42,6 @@ public:
 private:
     PPORTWAVERT    m_Port;
     NODUS_RING     m_Ring;
+    KMUTEX         m_RingLock;
     PVOID volatile m_Writer;
 };

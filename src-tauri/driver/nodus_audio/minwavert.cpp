@@ -97,11 +97,23 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(PUNKNOWN, PRESOURCELIST, PPORTWAVE
     m_Port = Port;
     m_Port->AddRef();
 
-    // Ring failure is non-fatal: the endpoint must still appear; audio is
-    // dropped until the next device restart (Nodus works without the driver too).
-    NTSTATUS ringStatus = NodusRingCreate(0, &m_Ring);
-    DbgPrint("Nodus: NodusRingCreate(0) status=0x%08X\n", ringStatus);
+    // Opportunistic attempt only — at boot \BaseNamedObjects does not exist yet
+    // and this fails with PATH_NOT_FOUND. The reliable creation point is
+    // NewStream (see EnsureRing). Ring failure is never fatal: the endpoint
+    // must still appear; audio is dropped until a ring exists.
+    EnsureRing();
     return STATUS_SUCCESS;
+}
+
+VOID CMiniportWaveRT::EnsureRing()
+{
+    if (m_Ring.Header) return;
+    KeWaitForSingleObject(&m_RingLock, Executive, KernelMode, FALSE, nullptr);
+    if (!m_Ring.Header) {
+        NTSTATUS status = NodusRingCreate(0, &m_Ring);
+        DbgPrint("Nodus: NodusRingCreate(0) status=0x%08X\n", status);
+    }
+    KeReleaseMutex(&m_RingLock, FALSE);
 }
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDescription(PPCFILTER_DESCRIPTOR* ppDesc)
@@ -134,6 +146,10 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
     UNREFERENCED_PARAMETER(Pin);
     UNREFERENCED_PARAMETER(Capture);
     UNREFERENCED_PARAMETER(DataFormat);
+
+    // audiodg opens streams long after boot — by now \BaseNamedObjects exists,
+    // so this is where the ring reliably comes to life (retries if Init failed).
+    EnsureRing();
 
     CMiniportWaveRTStream* s =
         new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRTStream(nullptr);
