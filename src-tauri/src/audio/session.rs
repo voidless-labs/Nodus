@@ -922,34 +922,35 @@ pub mod platform {
                             }
                         }
 
-                        let frames_to_write =
-                            (frame.len() / format.channels as usize).min(buf_frames as usize);
-                        if frames_to_write == 0 {
-                            continue;
+                        // Write the WHOLE frame, in parts if the WASAPI buffer is
+                        // momentarily full. Dropping the remainder (the old behavior)
+                        // audibly crackles with bursty sources — the kernel ring
+                        // delivers 2-3 chunks per ~15.6 ms timer tick and the tails
+                        // didn't fit into the 20 ms device buffer.
+                        let ch = format.channels as usize;
+                        let total_frames = frame.len() / ch;
+                        let mut written = 0usize;
+                        while written < total_frames && !stop_flag.load(Ordering::SeqCst) {
+                            let padding = client.GetCurrentPadding().unwrap_or(0);
+                            let available = buf_frames.saturating_sub(padding) as usize;
+                            if available == 0 {
+                                std::thread::sleep(Duration::from_millis(1));
+                                continue;
+                            }
+                            let n = (total_frames - written).min(available);
+
+                            let buf_ptr = render
+                                .GetBuffer(n as u32)
+                                .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
+
+                            let dst = std::slice::from_raw_parts_mut(buf_ptr as *mut f32, n * ch);
+                            dst.copy_from_slice(&frame[written * ch..(written + n) * ch]);
+
+                            render
+                                .ReleaseBuffer(n as u32, 0)
+                                .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
+                            written += n;
                         }
-
-                        let padding = client.GetCurrentPadding().unwrap_or(0);
-                        let available = buf_frames.saturating_sub(padding) as usize;
-                        let write_count = frames_to_write.min(available);
-                        if write_count == 0 {
-                            std::thread::sleep(Duration::from_millis(1));
-                            continue;
-                        }
-
-                        let buf_ptr = render
-                            .GetBuffer(write_count as u32)
-                            .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
-
-                        let dst = std::slice::from_raw_parts_mut(
-                            buf_ptr as *mut f32,
-                            write_count * format.channels as usize,
-                        );
-                        let src = &frame[..write_count * format.channels as usize];
-                        dst.copy_from_slice(src);
-
-                        render
-                            .ReleaseBuffer(write_count as u32, 0)
-                            .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
                         // No frame yet — sleep briefly. WASAPI shared mode handles
