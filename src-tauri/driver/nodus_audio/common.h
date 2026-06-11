@@ -1,57 +1,53 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// Shared constants and ring-buffer layout — included by both the kernel
-// driver (C++) and Nodus userspace (via virtual_capture.rs raw types).
-// ---------------------------------------------------------------------------
-
-#define NODUS_AUDIO_MAGIC       0x4E4F4455UL   // 'NODU'
-
-// Fixed audio format: 48 kHz · 2 ch · IEEE float 32-bit (matches Nodus engine)
-#define NODUS_SAMPLE_RATE       48000u
-#define NODUS_CHANNELS          2u
-#define NODUS_BITS_PER_SAMPLE   32u
-#define NODUS_BYTES_PER_SAMPLE  4u
-#define NODUS_BYTES_PER_FRAME   8u                              // 2 ch * 4 bytes
-#define NODUS_BYTES_PER_SEC     384000u                         // 48000 * 8
-
-// WaveRT cyclic buffer presented to audiodg: 100 ms
-#define NODUS_WAVE_FRAMES       4800u
-#define NODUS_WAVE_BYTES        38400u                          // 4800 * 8
-
-// Shared ring buffer exported to userspace: 2 s
-#define NODUS_RING_FRAMES       96000u
-#define NODUS_RING_BYTES        768000u                         // 96000 * 8
-
-// Named kernel section — driver creates, Nodus opens
-// Kernel:    \BaseNamedObjects\NodusVirtualAudio
-// Userspace: Global\NodusVirtualAudio
-#define NODUS_SECTION_WNAME     L"\\BaseNamedObjects\\NodusVirtualAudio"
-#define NODUS_SECTION_NAME_U    "Global\\NodusVirtualAudio"
-
-#define NODUS_POOL_TAG          'dnoN'
-
-// ---------------------------------------------------------------------------
-// Shared memory layout  (total ≈ 768 KB)
+// Ring-buffer contract between the kernel driver (C++) and Nodus userspace.
+// The Rust side mirrors this layout manually: src-tauri/src/audio/virtual_capture.rs
+// — any change here MUST be reflected there (and bump NODUS_RING_VERSION).
 //
-// WriteBytes / ReadBytes are monotonically increasing byte counters.
-// Actual ring index = counter % NODUS_RING_BYTES.
-// Available data    = WriteBytes - ReadBytes  (clamped to NODUS_RING_BYTES).
+// The driver creates one named section per virtual device:
+//   Kernel name:    \BaseNamedObjects\NodusRing-<id>
+//   Userspace name: Global\NodusRing-<id>
+// The single Phase-1 device uses id = 0. The parametric name is the groundwork
+// for multi-device support (t5): each future subdevice gets its own ring.
+//
+// Audio format inside the ring = the fixed render format of the endpoint
+// (see nodus.h): 48 kHz, 2 ch, 16-bit PCM, little-endian, interleaved.
+// The Nodus engine converts to f32 on read.
 // ---------------------------------------------------------------------------
-#pragma pack(push, 4)
+
+#define NODUS_RING_MAGIC        0x4E4F4455UL   // 'NODU'
+#define NODUS_RING_VERSION      2u             // v1 (f32 data, 32-bit counters) is retired
+
+// 2 seconds of audio: 48000 frames/s * 4 bytes/frame (2 ch * 16-bit) * 2 s.
+#define NODUS_RING_BYTES        384000u
+
+// printf-style kernel name template (one ULONG argument: the device id).
+#define NODUS_RING_NAME_KERNEL  L"\\BaseNamedObjects\\NodusRing-%u"
+
+// ---------------------------------------------------------------------------
+// Shared memory layout. Header is exactly 64 bytes; audio data follows.
+//
+// WriteBytes is a monotonically increasing byte counter advanced ONLY by the
+// driver's PASSIVE-level copy thread (single writer). Ring data index =
+// WriteBytes % RingBytes. ReadBytes is advisory — the reader keeps its own
+// cursor and may update it for diagnostics.
+//
+// Counters are 64-bit on purpose: a 32-bit counter at 192 kB/s wraps in
+// ~6 hours (the old driver's ULONG at 384 kB/s wrapped in ~3 h — real bug).
+// ---------------------------------------------------------------------------
+#pragma pack(push, 8)
 typedef struct _NODUS_RING_BUFFER {
-    unsigned long  Magic;           // NODUS_AUDIO_MAGIC
-    unsigned long  SampleRate;      // NODUS_SAMPLE_RATE
-    unsigned short Channels;        // NODUS_CHANNELS
-    unsigned short BitsPerSample;   // NODUS_BITS_PER_SAMPLE
-    unsigned long  RingBytes;       // NODUS_RING_BYTES
-
-    // Counters are written/read by different CPU cores — must be accessed
-    // with interlocked operations or acquire/release fences in production.
-    // For MVP we use volatile and accept possible single-sample tearing.
-    volatile unsigned long WriteBytes;
-    volatile unsigned long ReadBytes;
-
-    unsigned char  Data[NODUS_RING_BYTES];
+    unsigned long   Magic;          // offset  0: NODUS_RING_MAGIC, written LAST on init
+    unsigned long   Version;        // offset  4: NODUS_RING_VERSION
+    unsigned long   SampleRate;     // offset  8: 48000
+    unsigned short  Channels;       // offset 12: 2
+    unsigned short  BitsPerSample;  // offset 14: 16
+    unsigned long   RingBytes;      // offset 16: NODUS_RING_BYTES
+    unsigned long   Reserved0;      // offset 20
+    volatile unsigned long long WriteBytes;  // offset 24: producer counter (driver)
+    volatile unsigned long long ReadBytes;   // offset 32: advisory reader cursor
+    unsigned long long Reserved1[3];         // offset 40..63
+    unsigned char   Data[NODUS_RING_BYTES];  // offset 64
 } NODUS_RING_BUFFER;
 #pragma pack(pop)

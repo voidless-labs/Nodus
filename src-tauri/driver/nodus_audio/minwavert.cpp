@@ -85,6 +85,9 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NonDelegatingQueryInterface(REFIID riid
 
 CMiniportWaveRT::~CMiniportWaveRT()
 {
+    // All streams hold a miniport reference and join their copy thread before
+    // releasing it, so by the time we run nobody can touch the ring view.
+    NodusRingDestroy(&m_Ring);
     if (m_Port) { m_Port->Release(); m_Port = nullptr; }
 }
 
@@ -93,6 +96,11 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(PUNKNOWN, PRESOURCELIST, PPORTWAVE
 {
     m_Port = Port;
     m_Port->AddRef();
+
+    // Ring failure is non-fatal: the endpoint must still appear; audio is
+    // dropped until the next device restart (Nodus works without the driver too).
+    NTSTATUS ringStatus = NodusRingCreate(0, &m_Ring);
+    DbgPrint("Nodus: NodusRingCreate(0) status=0x%08X\n", ringStatus);
     return STATUS_SUCCESS;
 }
 
@@ -132,7 +140,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
     if (!s) return STATUS_INSUFFICIENT_RESOURCES;
     s->AddRef();
 
-    NTSTATUS status = s->Init();
+    NTSTATUS status = s->Init(this);
     if (!NT_SUCCESS(status)) { s->Release(); return status; }
 
     *OutStream = (PMINIPORTWAVERTSTREAM)s;   // ref handed to caller

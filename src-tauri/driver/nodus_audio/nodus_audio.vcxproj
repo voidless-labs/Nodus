@@ -61,7 +61,7 @@
     <Link>
       <!-- Audio kernel libraries. stdunk.lib provides the CUnknown base-class
            implementation (constructor/destructor + NonDelegating* methods). -->
-      <AdditionalDependencies>portcls.lib;stdunk.lib;ks.lib;ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>portcls.lib;stdunk.lib;ks.lib;ksguid.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -74,6 +74,7 @@
     <ClCompile Include="minwavert.cpp" />
     <ClCompile Include="minwavertstream.cpp" />
     <ClCompile Include="mintopo.cpp" />
+    <ClCompile Include="ring.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -82,6 +83,7 @@
     <ClInclude Include="minwavertstream.h" />
     <ClInclude Include="mintopo.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="ring.h" />
   </ItemGroup>
 
   <ItemGroup>

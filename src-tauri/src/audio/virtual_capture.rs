@@ -1,9 +1,11 @@
 /// virtual_capture.rs — Reads PCM audio from the Nodus kernel driver's shared ring buffer
 /// and feeds it into the existing routing broadcast channel.
 ///
-/// The driver (nodus_audio.sys) exposes a named file-mapping section
-/// "Global\NodusVirtualAudio" containing a NODUS_RING_BUFFER struct.
-/// We open it read-only, spin on WriteBytes advancing, and push frames.
+/// The driver (nodus_audio.sys) exposes one named file-mapping section per virtual
+/// device: "Global\NodusRing-<id>" (id = 0 for the single Phase-1 device), holding a
+/// NODUS_RING_BUFFER v2 struct — see driver/nodus_audio/common.h, which is the
+/// authoritative layout. The ring carries the endpoint's fixed render format
+/// (48 kHz, 2 ch, 16-bit PCM); we convert to interleaved f32 for the engine.
 
 use std::{
     sync::{
@@ -14,13 +16,15 @@ use std::{
 };
 
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::session::{AudioFrame, SessionError, CHANNEL_CAPACITY};
 
-// Matches NODUS_RING_BUFFER layout in common.h  (little-endian, pack(4))
-const RING_MAGIC: u32 = 0x4E4F4455; // 'NODU'
-const RING_BYTES: usize = 48000 * 2 * 4 * 2; // 768 000 bytes — 2 s stereo f32 48 kHz
+// Mirrors common.h — bump together with NODUS_RING_VERSION there.
+const RING_MAGIC: u32 = 0x4E4F_4455; // 'NODU'
+const RING_VERSION: u32 = 2;
+const RING_BYTES: usize = 384_000; // 2 s of 48 kHz stereo 16-bit
+const SECTION_NAME: &str = "Global\\NodusRing-0";
 
 // ── Windows-only implementation ──────────────────────────────────────────────
 
@@ -43,31 +47,32 @@ pub mod platform {
     unsafe impl Send for RingView {}
     unsafe impl Sync for RingView {}
 
-    // Matches NODUS_RING_BUFFER in common.h
-    #[repr(C, packed(4))]
+    // Matches NODUS_RING_BUFFER (pack(8)) in common.h: 64-byte header + data.
+    #[repr(C)]
     struct RingHeader {
-        magic: u32,
-        sample_rate: u32,
-        channels: u16,
-        bits_per_sample: u16,
-        ring_bytes: u32,
-        write_bytes: u32, // volatile — driver increments
-        read_bytes: u32,  // we update this locally (advisory only)
-        data: [u8; RING_BYTES],
+        magic: u32,           // offset 0
+        version: u32,         // offset 4
+        sample_rate: u32,     // offset 8
+        channels: u16,        // offset 12
+        bits_per_sample: u16, // offset 14
+        ring_bytes: u32,      // offset 16
+        _reserved0: u32,      // offset 20
+        write_bytes: u64,     // offset 24 — driver's monotonic producer counter
+        read_bytes: u64,      // offset 32 — advisory, unused by us
+        _reserved1: [u64; 3], // offset 40
+        data: [u8; RING_BYTES], // offset 64
     }
 
     impl RingView {
         fn open() -> Result<Self, SessionError> {
-            let name: Vec<u16> = "Global\\NodusVirtualAudio\0"
-                .encode_utf16()
-                .collect();
+            let name: Vec<u16> = format!("{SECTION_NAME}\0").encode_utf16().collect();
 
             unsafe {
                 let handle =
                     OpenFileMappingW(FILE_MAP_READ.0, false, PCWSTR(name.as_ptr()))
                         .map_err(|e| {
                             SessionError::DeviceUnavailable(format!(
-                                "NodusVirtualAudio section not found — is nodus_audio.sys loaded? {e}"
+                                "{SECTION_NAME} section not found — is nodus_audio.sys loaded? {e}"
                             ))
                         })?;
 
@@ -79,10 +84,21 @@ pub mod platform {
                 }
 
                 let ring = &*(ptr.Value as *const RingHeader);
-                if ring.magic != RING_MAGIC {
-                    return Err(SessionError::DeviceUnavailable(
-                        "bad magic — driver version mismatch".into(),
-                    ));
+                if ring.magic != RING_MAGIC || ring.version != RING_VERSION {
+                    return Err(SessionError::DeviceUnavailable(format!(
+                        "ring header mismatch (magic 0x{:08X}, version {}) — driver/app version skew",
+                        ring.magic, ring.version
+                    )));
+                }
+                if ring.sample_rate != 48_000
+                    || ring.channels != 2
+                    || ring.bits_per_sample != 16
+                    || ring.ring_bytes as usize != RING_BYTES
+                {
+                    return Err(SessionError::DeviceUnavailable(format!(
+                        "unexpected ring format: {} Hz, {} ch, {} bit, {} bytes",
+                        ring.sample_rate, ring.channels, ring.bits_per_sample, ring.ring_bytes
+                    )));
                 }
 
                 Ok(RingView { ptr: ring as *const RingHeader, _handle: handle })
@@ -94,26 +110,43 @@ pub mod platform {
             unsafe { &*self.ptr }
         }
 
-        /// How many bytes are available to read.
+        /// Driver's monotonic write counter (bytes ever produced).
         #[inline]
-        fn available(&self, local_read: u32) -> u32 {
-            let write = unsafe {
-                std::ptr::read_volatile(&self.header().write_bytes)
-            };
-            write.wrapping_sub(local_read).min(RING_BYTES as u32)
+        fn write_counter(&self) -> u64 {
+            unsafe { std::ptr::read_volatile(&self.header().write_bytes) }
         }
 
-        /// Copy `n` bytes starting at `local_read` into `out`.
-        fn read_bytes(&self, local_read: u32, out: &mut [f32]) {
+        /// How many unread bytes sit between our cursor and the driver's counter.
+        #[inline]
+        fn available(&self, local_read: u64) -> u64 {
+            self.write_counter().saturating_sub(local_read)
+        }
+
+        /// Copy 16-bit PCM starting at `local_read` and convert to f32 into `out`.
+        fn read_chunk(&self, local_read: u64, out: &mut [f32]) {
             let h = self.header();
-            let n = out.len() * 4;
-            let mut src = (local_read as usize) % RING_BYTES;
-            let dst = unsafe {
-                std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, n)
-            };
-            for byte in dst.iter_mut() {
-                *byte = unsafe { std::ptr::read_volatile(&h.data[src]) };
-                src = (src + 1) % RING_BYTES;
+            let n_bytes = out.len() * 2; // one i16 per f32 sample
+            let mut tmp = vec![0u8; n_bytes];
+
+            // The ring wraps at most once per chunk → max two copy spans.
+            let mut src = (local_read % RING_BYTES as u64) as usize;
+            let mut copied = 0usize;
+            while copied < n_bytes {
+                let span = (n_bytes - copied).min(RING_BYTES - src);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        h.data.as_ptr().add(src),
+                        tmp.as_mut_ptr().add(copied),
+                        span,
+                    );
+                }
+                copied += span;
+                src = (src + span) % RING_BYTES;
+            }
+
+            for (i, sample) in out.iter_mut().enumerate() {
+                let v = i16::from_le_bytes([tmp[2 * i], tmp[2 * i + 1]]);
+                *sample = f32::from(v) / 32_768.0;
             }
         }
     }
@@ -125,6 +158,28 @@ pub mod platform {
                     Value: self.ptr as *mut _,
                 });
             }
+        }
+    }
+
+    // The driver asserts the same offsets with C_ASSERT in ring.cpp — both sides
+    // pin the contract from common.h independently.
+    #[cfg(test)]
+    mod layout_tests {
+        use super::*;
+        use std::mem::{offset_of, size_of};
+
+        #[test]
+        fn ring_header_layout_matches_common_h() {
+            assert_eq!(offset_of!(RingHeader, magic), 0);
+            assert_eq!(offset_of!(RingHeader, version), 4);
+            assert_eq!(offset_of!(RingHeader, sample_rate), 8);
+            assert_eq!(offset_of!(RingHeader, channels), 12);
+            assert_eq!(offset_of!(RingHeader, bits_per_sample), 14);
+            assert_eq!(offset_of!(RingHeader, ring_bytes), 16);
+            assert_eq!(offset_of!(RingHeader, write_bytes), 24);
+            assert_eq!(offset_of!(RingHeader, read_bytes), 32);
+            assert_eq!(offset_of!(RingHeader, data), 64);
+            assert_eq!(size_of::<RingHeader>(), 64 + RING_BYTES);
         }
     }
 
@@ -163,20 +218,29 @@ pub mod platform {
             let stop = Arc::clone(&self.stop_flag);
 
             std::thread::spawn(move || {
-                let mut local_read: u32 = unsafe {
-                    std::ptr::read_volatile(&view.header().write_bytes)
-                };
                 const FRAMES_PER_CHUNK: usize = 480; // 10 ms at 48 kHz
                 const SAMPLES_PER_CHUNK: usize = FRAMES_PER_CHUNK * 2; // stereo
-                const BYTES_PER_CHUNK: u32 = (SAMPLES_PER_CHUNK * 4) as u32;
+                const BYTES_PER_CHUNK: u64 = (SAMPLES_PER_CHUNK * 2) as u64; // 16-bit
 
-                debug!("VirtualCapture: reading from NodusVirtualAudio ring");
+                let mut local_read: u64 = view.write_counter();
+
+                debug!("VirtualCapture: reading from {SECTION_NAME} ring");
 
                 while !stop.load(Ordering::SeqCst) {
-                    if view.available(local_read) >= BYTES_PER_CHUNK {
+                    let avail = view.available(local_read);
+
+                    // If we fell behind by most of the ring the oldest bytes are
+                    // already being overwritten — jump close to the live edge.
+                    if avail > (RING_BYTES as u64) * 3 / 4 {
+                        warn!("VirtualCapture: reader lagged, resyncing to live edge");
+                        local_read = view.write_counter().saturating_sub(BYTES_PER_CHUNK);
+                        continue;
+                    }
+
+                    if avail >= BYTES_PER_CHUNK {
                         let mut frame = vec![0f32; SAMPLES_PER_CHUNK];
-                        view.read_bytes(local_read, &mut frame);
-                        local_read = local_read.wrapping_add(BYTES_PER_CHUNK);
+                        view.read_chunk(local_read, &mut frame);
+                        local_read += BYTES_PER_CHUNK;
                         let _ = tx.send(frame);
                     } else {
                         std::thread::sleep(Duration::from_millis(2));
@@ -210,3 +274,19 @@ pub mod platform {
 }
 
 pub use platform::VirtualCapture;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The layout constants must stay in lockstep with driver/nodus_audio/common.h.
+    #[test]
+    fn ring_constants_match_contract() {
+        assert_eq!(RING_MAGIC, 0x4E4F_4455);
+        assert_eq!(RING_VERSION, 2);
+        // 2 seconds * 48000 frames * 2 ch * 2 bytes
+        assert_eq!(RING_BYTES, 2 * 48_000 * 2 * 2);
+        assert_eq!(SECTION_NAME, "Global\\NodusRing-0");
+    }
+
+}
