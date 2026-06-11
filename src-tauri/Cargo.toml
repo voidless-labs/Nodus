@@ -29,6 +29,10 @@ path = "src/bin/ring_check.rs"
 name = "ring-play"
 path = "src/bin/ring_play.rs"
 
+[[bin]]
+name = "ring-tone"
+path = "src/bin/ring_tone.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
