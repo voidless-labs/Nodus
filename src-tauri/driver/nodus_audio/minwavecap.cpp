@@ -1,11 +1,14 @@
-#include "minwavert.h"
-#include "minwavertstream.h"
+#include "minwavecap.h"
+#include "minwavecapstream.h"
 #include <ksmedia.h>
 
-// ── Wave filter tables ──────────────────────────────────────────────────────
+// ── Capture wave filter tables ──────────────────────────────────────────────
+// Mirror of the render wave filter with reversed dataflow: the host pin is a
+// SOURCE (audiodg reads PCM out of the filter), the bridge pin is fed by the
+// mic topology.
 
-// Host pin format: PCM 48 kHz, 2 ch, 16-bit.
-static KSDATARANGE_AUDIO WaveHostDataRange = {
+// Host pin format: PCM 48 kHz, 2 ch, 16-bit (same fixed format as render).
+static KSDATARANGE_AUDIO WaveCapHostDataRange = {
     {
         sizeof(KSDATARANGE_AUDIO), 0, 0, 0,
         STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
@@ -14,63 +17,64 @@ static KSDATARANGE_AUDIO WaveHostDataRange = {
     },
     NODUS_CHANNELS, NODUS_BITS, NODUS_BITS, NODUS_RATE, NODUS_RATE
 };
-static PKSDATARANGE WaveHostDataRangePtrs[] = { (PKSDATARANGE)&WaveHostDataRange };
+static PKSDATARANGE WaveCapHostDataRangePtrs[] = { (PKSDATARANGE)&WaveCapHostDataRange };
 
-// Bridge pin: analog, connects to the topology miniport.
-static KSDATARANGE WaveBridgeDataRange = {
+// Bridge pin: analog, connects to the mic topology miniport.
+static KSDATARANGE WaveCapBridgeDataRange = {
     sizeof(KSDATARANGE), 0, 0, 0,
     STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
     STATICGUIDOF(KSDATAFORMAT_SUBTYPE_ANALOG),
     STATICGUIDOF(KSDATAFORMAT_SPECIFIER_NONE)
 };
-static PKSDATARANGE WaveBridgeDataRangePtrs[] = { &WaveBridgeDataRange };
+static PKSDATARANGE WaveCapBridgeDataRangePtrs[] = { &WaveCapBridgeDataRange };
 
-static PCPIN_DESCRIPTOR WavePins[] = {
-    // Pin 0 — host sink (apps connect and stream PCM here)
+static PCPIN_DESCRIPTOR WaveCapPins[] = {
+    // Pin 0 — host source (audiodg opens this and reads PCM)
     {
         1, 1, 0, nullptr,
         {
             0, nullptr, 0, nullptr,
-            SIZEOF_ARRAY(WaveHostDataRangePtrs), WaveHostDataRangePtrs,
-            KSPIN_DATAFLOW_IN, KSPIN_COMMUNICATION_SINK,
+            SIZEOF_ARRAY(WaveCapHostDataRangePtrs), WaveCapHostDataRangePtrs,
+            KSPIN_DATAFLOW_OUT, KSPIN_COMMUNICATION_SINK,
             &KSCATEGORY_AUDIO, nullptr, 0
         }
     },
-    // Pin 1 — bridge source (to topology)
+    // Pin 1 — bridge sink (from topology)
     {
         0, 0, 0, nullptr,
         {
             0, nullptr, 0, nullptr,
-            SIZEOF_ARRAY(WaveBridgeDataRangePtrs), WaveBridgeDataRangePtrs,
-            KSPIN_DATAFLOW_OUT, KSPIN_COMMUNICATION_NONE,
+            SIZEOF_ARRAY(WaveCapBridgeDataRangePtrs), WaveCapBridgeDataRangePtrs,
+            KSPIN_DATAFLOW_IN, KSPIN_COMMUNICATION_NONE,
             &KSCATEGORY_AUDIO, nullptr, 0
         }
     }
 };
 
-static PCCONNECTION_DESCRIPTOR WaveConnections[] = {
-    { PCFILTER_NODE, WAVE_PIN_HOST, PCFILTER_NODE, WAVE_PIN_BRIDGE }
+static PCCONNECTION_DESCRIPTOR WaveCapConnections[] = {
+    // bridge pin (in) -> host pin (out): data flows from the mic toward the app
+    { PCFILTER_NODE, WAVECAP_PIN_BRIDGE, PCFILTER_NODE, WAVECAP_PIN_HOST }
 };
 
 // PortCls registers/enables a device interface per category listed HERE; the
 // INF AddInterface lines only seed FriendlyName/CLSID under those interfaces.
 // Without these categories MMDevAPI never sees the filter and no endpoint is built.
-static GUID WaveCategories[] = {
+static GUID WaveCapCategories[] = {
     { STATIC_KSCATEGORY_AUDIO },
-    { STATIC_KSCATEGORY_RENDER },
+    { STATIC_KSCATEGORY_CAPTURE },
     { STATIC_KSCATEGORY_REALTIME }
 };
 
-static PCFILTER_DESCRIPTOR WaveFilterDescriptor = {
+static PCFILTER_DESCRIPTOR WaveCapFilterDescriptor = {
     0, nullptr,
-    sizeof(PCPIN_DESCRIPTOR), SIZEOF_ARRAY(WavePins), WavePins,
+    sizeof(PCPIN_DESCRIPTOR), SIZEOF_ARRAY(WaveCapPins), WaveCapPins,
     sizeof(PCNODE_DESCRIPTOR), 0, nullptr,
-    SIZEOF_ARRAY(WaveConnections), WaveConnections,
-    SIZEOF_ARRAY(WaveCategories), WaveCategories
+    SIZEOF_ARRAY(WaveCapConnections), WaveCapConnections,
+    SIZEOF_ARRAY(WaveCapCategories), WaveCapCategories
 };
 
 // ── IUnknown ────────────────────────────────────────────────────────────────
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NonDelegatingQueryInterface(REFIID riid, PVOID* ppv)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::NonDelegatingQueryInterface(REFIID riid, PVOID* ppv)
 {
     if (IsEqualGUIDAligned(riid, IID_IUnknown))
         *ppv = PVOID(PUNKNOWN(PMINIPORTWAVERT(this)));
@@ -83,16 +87,16 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NonDelegatingQueryInterface(REFIID riid
     return STATUS_SUCCESS;
 }
 
-CMiniportWaveRT::~CMiniportWaveRT()
+CMiniportWaveCapture::~CMiniportWaveCapture()
 {
-    // All streams hold a miniport reference and join their copy thread before
+    // All streams hold a miniport reference and join their fill thread before
     // releasing it, so by the time we run nobody can touch the ring view.
     NodusRingDestroy(&m_Ring);
     if (m_Port) { m_Port->Release(); m_Port = nullptr; }
 }
 
 // ── IMiniportWaveRT ─────────────────────────────────────────────────────────
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(PUNKNOWN, PRESOURCELIST, PPORTWAVERT Port)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::Init(PUNKNOWN, PRESOURCELIST, PPORTWAVERT Port)
 {
     m_Port = Port;
     m_Port->AddRef();
@@ -100,35 +104,35 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::Init(PUNKNOWN, PRESOURCELIST, PPORTWAVE
     // Opportunistic attempt only — at boot \BaseNamedObjects does not exist yet
     // and this fails with PATH_NOT_FOUND. The reliable creation point is
     // NewStream (see EnsureRing). Ring failure is never fatal: the endpoint
-    // must still appear; audio is dropped until a ring exists.
+    // must still appear; the mic produces silence until a ring exists.
     EnsureRing();
     return STATUS_SUCCESS;
 }
 
-VOID CMiniportWaveRT::EnsureRing()
+VOID CMiniportWaveCapture::EnsureRing()
 {
     if (m_Ring.Header) return;
     KeWaitForSingleObject(&m_RingLock, Executive, KernelMode, FALSE, nullptr);
     if (!m_Ring.Header) {
-        NTSTATUS status = NodusRingCreate(NODUS_RING_NAME_KERNEL, 0, FALSE, &m_Ring);
-        DbgPrint("Nodus: NodusRingCreate(render, 0) status=0x%08X\n", status);
+        NTSTATUS status = NodusRingCreate(NODUS_RING_MIC_NAME_KERNEL, 0, TRUE, &m_Ring);
+        DbgPrint("Nodus: NodusRingCreate(mic, 0) status=0x%08X\n", status);
     }
     KeReleaseMutex(&m_RingLock, FALSE);
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDescription(PPCFILTER_DESCRIPTOR* ppDesc)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::GetDescription(PPCFILTER_DESCRIPTOR* ppDesc)
 {
-    *ppDesc = &WaveFilterDescriptor;
+    *ppDesc = &WaveCapFilterDescriptor;
     return STATUS_SUCCESS;
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::DataRangeIntersection(
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::DataRangeIntersection(
     ULONG, PKSDATARANGE, PKSDATARANGE, ULONG, PVOID, PULONG)
 {
     return STATUS_NOT_IMPLEMENTED; // PortCls computes the intersection from our data range
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDeviceDescription(PDEVICE_DESCRIPTION pDevDesc)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::GetDeviceDescription(PDEVICE_DESCRIPTION pDevDesc)
 {
     RtlZeroMemory(pDevDesc, sizeof(DEVICE_DESCRIPTION));
     pDevDesc->Master = TRUE;
@@ -139,7 +143,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::GetDeviceDescription(PDEVICE_DESCRIPTIO
     return STATUS_SUCCESS;
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::NewStream(
     PMINIPORTWAVERTSTREAM* OutStream, PPORTWAVERTSTREAM, ULONG Pin, BOOLEAN Capture,
     PKSDATAFORMAT DataFormat)
 {
@@ -150,9 +154,10 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
     // audiodg opens streams long after boot — by now \BaseNamedObjects exists,
     // so this is where the ring reliably comes to life (retries if Init failed).
     EnsureRing();
+    DbgPrint("Nodus: capture NewStream (ring=%p)\n", Ring());
 
-    CMiniportWaveRTStream* s =
-        new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRTStream(nullptr);
+    CMiniportWaveCaptureStream* s =
+        new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveCaptureStream(nullptr);
     if (!s) return STATUS_INSUFFICIENT_RESOURCES;
     s->AddRef();
 
@@ -164,9 +169,9 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
-NTSTATUS CreateMiniportWaveRTNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown)
+NTSTATUS CreateMiniportWaveCaptureNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown)
 {
-    CMiniportWaveRT* obj = new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(OuterUnknown);
+    CMiniportWaveCapture* obj = new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveCapture(OuterUnknown);
     if (!obj) return STATUS_INSUFFICIENT_RESOURCES;
     obj->AddRef();
     *Unknown = PUNKNOWN(PMINIPORTWAVERT(obj));

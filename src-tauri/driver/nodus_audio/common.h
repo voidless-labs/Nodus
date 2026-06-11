@@ -22,16 +22,30 @@
 // 2 seconds of audio: 48000 frames/s * 4 bytes/frame (2 ch * 16-bit) * 2 s.
 #define NODUS_RING_BYTES        384000u
 
-// printf-style kernel name template (one ULONG argument: the device id).
-#define NODUS_RING_NAME_KERNEL  L"\\BaseNamedObjects\\NodusRing-%u"
+// printf-style kernel name templates (one ULONG argument: the device id).
+//
+// Render ring (virtual speaker): the DRIVER produces (WriteBytes), Nodus
+// userspace consumes. Userspace name: Global\NodusRing-<id>.
+#define NODUS_RING_NAME_KERNEL      L"\\BaseNamedObjects\\NodusRing-%u"
+//
+// Capture ring (virtual mic) — counter roles are REVERSED relative to render:
+//   WriteBytes is advanced by Nodus USERSPACE (producer: the audio it wants the
+//   mic to "say"), ReadBytes is advanced by the DRIVER's PASSIVE-level copy
+//   thread (consumer feeding the WaveRT capture buffer). The section is
+//   world-writable (non-admin Nodus must write into it).
+// Userspace name: Global\NodusRing-mic-<id>.
+#define NODUS_RING_MIC_NAME_KERNEL  L"\\BaseNamedObjects\\NodusRing-mic-%u"
 
 // ---------------------------------------------------------------------------
 // Shared memory layout. Header is exactly 64 bytes; audio data follows.
+// The same layout serves both directions; who advances which counter depends
+// on the ring (see the name templates above).
 //
 // WriteBytes is a monotonically increasing byte counter advanced ONLY by the
-// driver's PASSIVE-level copy thread (single writer). Ring data index =
-// WriteBytes % RingBytes. ReadBytes is advisory — the reader keeps its own
-// cursor and may update it for diagnostics.
+// producer (render ring: the driver's PASSIVE-level copy thread; capture ring:
+// Nodus userspace). Ring data index = WriteBytes % RingBytes. ReadBytes:
+// advisory on the render ring (the reader keeps its own cursor); authoritative
+// on the capture ring (the driver consumes up to it).
 //
 // Counters are 64-bit on purpose: a 32-bit counter at 192 kB/s wraps in
 // ~6 hours (the old driver's ULONG at 384 kB/s wrapped in ~3 h — real bug).

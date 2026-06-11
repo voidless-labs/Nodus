@@ -14,8 +14,10 @@ C_ASSERT(sizeof(NODUS_RING_BUFFER) == 64 + NODUS_RING_BYTES);
 // A kernel-created named section gets a SYSTEM-only descriptor by default, and
 // OpenFileMappingW from a normal (non-elevated) Nodus process then fails with
 // ACCESS_DENIED — so the DACL must be explicit: SYSTEM/Admins full access,
-// Everyone read-only.
-static NTSTATUS NodusBuildRingSd(_Out_ PSECURITY_DESCRIPTOR* OutSd, _Out_ PACL* OutDacl)
+// Everyone read-only (render ring) or read-write (capture ring, where a
+// non-admin Nodus process is the audio producer).
+static NTSTATUS NodusBuildRingSd(_In_ BOOLEAN WorldWritable,
+                                 _Out_ PSECURITY_DESCRIPTOR* OutSd, _Out_ PACL* OutDacl)
 {
     *OutSd = nullptr;
     *OutDacl = nullptr;
@@ -37,11 +39,14 @@ static NTSTATUS NodusBuildRingSd(_Out_ PSECURITY_DESCRIPTOR* OutSd, _Out_ PACL* 
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    ACCESS_MASK worldMask = SECTION_MAP_READ | SECTION_QUERY;
+    if (WorldWritable) worldMask |= SECTION_MAP_WRITE;
+
     NTSTATUS status = RtlCreateSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION);
     if (NT_SUCCESS(status)) status = RtlCreateAcl(dacl, aclBytes, ACL_REVISION);
     if (NT_SUCCESS(status)) status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, SECTION_ALL_ACCESS, sidSystem);
     if (NT_SUCCESS(status)) status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, SECTION_ALL_ACCESS, sidAdmins);
-    if (NT_SUCCESS(status)) status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, SECTION_MAP_READ | SECTION_QUERY, sidWorld);
+    if (NT_SUCCESS(status)) status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, worldMask, sidWorld);
     if (NT_SUCCESS(status)) status = RtlSetDaclSecurityDescriptor(sd, TRUE, dacl, FALSE);
 
     if (!NT_SUCCESS(status)) {
@@ -54,13 +59,14 @@ static NTSTATUS NodusBuildRingSd(_Out_ PSECURITY_DESCRIPTOR* OutSd, _Out_ PACL* 
     return STATUS_SUCCESS;
 }
 
-NTSTATUS NodusRingCreate(_In_ ULONG Id, _Out_ NODUS_RING* Ring)
+NTSTATUS NodusRingCreate(_In_ PCWSTR NameTemplate, _In_ ULONG Id,
+                         _In_ BOOLEAN WorldWritable, _Out_ NODUS_RING* Ring)
 {
     PAGED_CODE();
     RtlZeroMemory(Ring, sizeof(*Ring));
 
     WCHAR nameBuf[64];
-    NTSTATUS status = RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), NODUS_RING_NAME_KERNEL, Id);
+    NTSTATUS status = RtlStringCchPrintfW(nameBuf, RTL_NUMBER_OF(nameBuf), NameTemplate, Id);
     if (!NT_SUCCESS(status)) return status;
 
     UNICODE_STRING name;
@@ -68,7 +74,7 @@ NTSTATUS NodusRingCreate(_In_ ULONG Id, _Out_ NODUS_RING* Ring)
 
     PSECURITY_DESCRIPTOR sd = nullptr;
     PACL dacl = nullptr;
-    status = NodusBuildRingSd(&sd, &dacl);
+    status = NodusBuildRingSd(WorldWritable, &sd, &dacl);
     if (!NT_SUCCESS(status)) return status;
 
     OBJECT_ATTRIBUTES oa;
