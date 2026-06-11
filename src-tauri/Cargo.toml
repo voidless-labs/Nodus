@@ -25,6 +25,10 @@ path = "src/bin/nodus_check.rs"
 name = "ring-check"
 path = "src/bin/ring_check.rs"
 
+[[bin]]
+name = "ring-play"
+path = "src/bin/ring_play.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
