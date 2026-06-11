@@ -17,18 +17,16 @@ if ($devcon) {
     & $devcon remove "ROOT\NodusVirtualAudio"
 }
 
-# 2 - Find and delete the staged driver package (oem*.inf) by original name.
+# 2 - Find and delete the staged driver package(s). Get-WindowsDriver is
+#     locale-independent (pnputil text output is localized and unsafe to parse).
 Write-Host "Locating staged driver package..."
-$published = pnputil /enum-drivers | Out-String
-$oem = $null
-$current = $null
-foreach ($line in ($published -split "`r?`n")) {
-    if ($line -match "Published Name\s*:\s*(oem\d+\.inf)") { $current = $matches[1] }
-    if ($line -match "Original Name\s*:\s*nodus_audio\.inf" -and $current) { $oem = $current }
-}
-if ($oem) {
-    Write-Host "Deleting driver package $oem ..."
-    pnputil /delete-driver $oem /uninstall /force
+$pkgs = @(Get-WindowsDriver -Online -ErrorAction SilentlyContinue |
+    Where-Object { $_.OriginalFileName -like '*nodus_audio.inf' })
+if ($pkgs.Count -gt 0) {
+    foreach ($p in $pkgs) {
+        Write-Host "Deleting driver package $($p.Driver) (v$($p.Version))..."
+        pnputil /delete-driver $p.Driver /uninstall /force
+    }
 } else {
     Write-Warning "nodus_audio.inf package not found in the driver store (already removed?)."
 }

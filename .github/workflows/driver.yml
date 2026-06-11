@@ -145,6 +145,16 @@ jobs:
           Copy-Item (Join-Path $env:DRIVER_DIR "nodus_audio.inf") $stage -Force
           "pkg=$stage" >> $env:GITHUB_OUTPUT
 
+          # Stamp a monotonically increasing DriverVer (build date + run number) so
+          # install.ps1 can compare package vs installed version and skip/update.
+          # Must happen BEFORE inf2cat: the catalog hashes the final .inf.
+          $ver  = "1.0.${{ github.run_number }}.0"
+          $date = (Get-Date).ToString("MM/dd/yyyy", [Globalization.CultureInfo]::InvariantCulture)
+          $infPath = Join-Path $stage "nodus_audio.inf"
+          (Get-Content $infPath) -replace '^(\s*DriverVer\s*=).*$', "`$1 $date,$ver" |
+            Set-Content $infPath -Encoding ASCII
+          Write-Host "Stamped DriverVer = $date,$ver"
+
           Write-Host "=== staging dir ==="
           Get-ChildItem $stage | Format-Table Name,Length
           Write-Host "=== nodus_audio.inf ==="
