@@ -22,23 +22,23 @@ foreach ($f in @($inf, (Join-Path $here "nodus_audio.sys"))) {
     if (-not (Test-Path $f)) { throw "Missing required file: $f" }
 }
 
-# 1 — Warn if Test Mode is off (required for test-signed drivers).
+# 1 - Warn if Test Mode is off (required for test-signed drivers).
 $bcd = bcdedit /enum "{current}" | Out-String
 if ($bcd -notmatch "(?im)^\s*testsigning\s+Yes") {
     Write-Warning "Test signing is OFF. A test-signed driver will fail to load."
     Write-Warning "Enable it (admin) then reboot:  bcdedit /set testsigning on"
 }
 
-# 2 — Trust the test certificate (Trusted Root + Trusted Publishers, machine store).
+# 2 - Trust the test certificate (Trusted Root + Trusted Publishers, machine store).
 if (Test-Path $cer) {
     Write-Host "Importing test certificate into LocalMachine Root and TrustedPublisher..."
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root          | Out-Null
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
 } else {
-    Write-Warning "nodus_test.cer not found — skipping cert import (ok for EV-signed builds)."
+    Write-Warning "nodus_test.cer not found - skipping cert import (ok for EV-signed builds)."
 }
 
-# 3 — Stage the driver package into the driver store.
+# 3 - Stage the driver package into the driver store.
 Write-Host "Adding driver package via pnputil..."
 pnputil /add-driver $inf /install
 if ($LASTEXITCODE -ne 0) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
