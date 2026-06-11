@@ -195,23 +195,37 @@ pub fn setup_background_tasks(handle: AppHandle) {
         }
     });
 
-    // VU meter — emits "volume-levels" at ~30fps when engine is running.
-    // Payload: {device_id: level_0_to_1} — UI maps device_id to node._deviceId.
+    // VU meter — emits "volume-levels" at ~15fps when engine is running, and only
+    // when the levels actually changed: every event triggers a WebView repaint,
+    // which is expensive on weak GPUs (Pentium N4200 field test: WebView2 GPU
+    // process at ~27% CPU). Payload: {device_id: level_0_to_1}.
     let handle_levels = handle.clone();
     std::thread::spawn(move || {
+        let mut prev: std::collections::HashMap<String, f32> = Default::default();
         loop {
-            std::thread::sleep(Duration::from_millis(33));
+            std::thread::sleep(Duration::from_millis(66));
             let engine = handle_levels.state::<EngineState>();
             // Engine is lock-free to query now; get_source_levels takes only the
             // short-lived internal captures lock.
             if !engine.0.is_running() {
+                if !prev.is_empty() {
+                    prev.clear(); // engine stopped — let the UI zero the meters
+                    if let Ok(payload) = serde_json::to_value(&prev) {
+                        let _ = handle_levels.emit_all("volume-levels", payload);
+                    }
+                }
                 continue;
             }
             let levels = engine.0.get_source_levels();
-            if !levels.is_empty() {
+            let changed = levels.len() != prev.len()
+                || levels
+                    .iter()
+                    .any(|(k, v)| (prev.get(k).copied().unwrap_or(-1.0) - v).abs() > 0.01);
+            if changed {
                 if let Ok(payload) = serde_json::to_value(&levels) {
                     let _ = handle_levels.emit_all("volume-levels", payload);
                 }
+                prev = levels;
             }
         }
     });

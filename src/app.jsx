@@ -283,14 +283,30 @@ export default function App() {
     return s;
   }, [ptt, edges, nodes]);
 
+  // Perf: while the window is in the background, pause cosmetic animations
+  // (CSS .app-blurred) and skip meter updates — an audio router spends most of
+  // its life unfocused, and the flow animation alone kept WebView2's GPU
+  // process at ~27% CPU on a Pentium N4200.
+  const blurredRef = useRef(false);
+  useEffect(() => {
+    const set = (b) => { blurredRef.current = b; document.body.classList.toggle('app-blurred', b); };
+    const onBlur = () => set(true);
+    const onFocus = () => set(false);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    return () => { window.removeEventListener('blur', onBlur); window.removeEventListener('focus', onFocus); };
+  }, []);
+
   // VU meter levels — real data from Tauri volume-levels event, mock fallback in browser.
   useEffect(() => {
     if (!live) { setLevels({}); return; }
 
     let unlisten;
-    // Real levels: Rust emits {device_id|exe_name: 0.0-1.0} at 30fps.
-    // Device sources keyed by WASAPI device_id; app sources keyed by exe_name.
+    // Real levels: Rust emits {device_id|exe_name: 0.0-1.0} at ~15fps,
+    // only when levels change. Device sources keyed by WASAPI device_id;
+    // app sources keyed by exe_name.
     Bridge.listenToEvent('volume-levels', (deviceLevels) => {
+      if (blurredRef.current) return; // window hidden — meters invisible anyway
       const nodesNow = nodesRef.current;
       const next = {};
       for (const [key, level] of Object.entries(deviceLevels)) {

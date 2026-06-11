@@ -249,8 +249,16 @@ html, body {
   fill: none; stroke: var(--accent); stroke-width: 1.75px;
   stroke-dasharray: 1 12; stroke-linecap: round; opacity: 0; pointer-events: none;
 }
-.edge.active .edge-flow { opacity: 0.9; animation: flow 0.9s linear infinite; }
+/* steps(13) = one 1px jump per dash-pattern pixel: visually the same flow,
+   but ~14 repaints/s instead of 60 — SVG dashoffset animation is paint-bound
+   and was the main GPU cost on weak machines. */
+.edge.active .edge-flow { opacity: 0.9; animation: flow 0.9s steps(13) infinite; }
 @keyframes flow { to { stroke-dashoffset: -13; } }
+
+/* Window in background (.app-blurred set in app.jsx): nobody sees the
+   cosmetics — stop repainting entirely. */
+.app-blurred .edge-flow,
+.app-blurred .live-dot { animation-play-state: paused; }
 
 .edge-temp { fill: none; stroke: var(--accent); stroke-width: 1.75px; stroke-dasharray: 4 4; opacity: 0.8; }
 
