@@ -1,4 +1,4 @@
-# uninstall.ps1 — Remove the Nodus Virtual Audio driver.
+# uninstall.ps1 - Remove the Nodus Virtual Audio driver.
 # Run from an elevated PowerShell:
 #   powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 
@@ -6,7 +6,7 @@
 $ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# 1 — Remove the device node (if devcon is available).
+# 1 - Remove the device node (if devcon is available).
 $devcon = (Get-Command devcon.exe -ErrorAction SilentlyContinue).Source
 if (-not $devcon) {
     $devcon = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Tools" -Recurse -Filter devcon.exe -ErrorAction SilentlyContinue |
@@ -17,7 +17,7 @@ if ($devcon) {
     & $devcon remove "ROOT\NodusVirtualAudio"
 }
 
-# 2 — Find and delete the staged driver package (oem*.inf) by original name.
+# 2 - Find and delete the staged driver package (oem*.inf) by original name.
 Write-Host "Locating staged driver package..."
 $published = pnputil /enum-drivers | Out-String
 $oem = $null
@@ -33,7 +33,7 @@ if ($oem) {
     Write-Warning "nodus_audio.inf package not found in the driver store (already removed?)."
 }
 
-# 3 — Remove the test certificate (best effort).
+# 3 - Remove the test certificate (best effort).
 Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher -ErrorAction SilentlyContinue |
     Where-Object { $_.Subject -eq "CN=Nodus Test Certificate" } |
     ForEach-Object {
