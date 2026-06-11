@@ -222,6 +222,10 @@ pub mod platform {
                 const SAMPLES_PER_CHUNK: usize = FRAMES_PER_CHUNK * 2; // stereo
                 const BYTES_PER_CHUNK: u64 = (SAMPLES_PER_CHUNK * 2) as u64; // 16-bit
 
+                // Without this the 2 ms poll below is really ~15.6 ms and the
+                // ring is forwarded in bursts that starve the render buffer.
+                let _timer = crate::audio::session::TimerResolutionGuard::acquire();
+
                 let mut local_read: u64 = view.write_counter();
 
                 debug!("VirtualCapture: reading from {SECTION_NAME} ring");

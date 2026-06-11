@@ -19,11 +19,40 @@ use tracing::{debug, error};
 
 use super::wasapi::{AudioFormat, WasapiError};
 
-pub const BUFFER_DURATION_MS: u64 = 20; // 10ms too tight for BT devices → underruns → crackling
+// 10ms was too tight for BT devices, 20ms too tight for the kernel-ring source:
+// the driver delivers audio in ~15.6ms timer-tick bursts, so the cushion must
+// cover at least two ticks of producer jitter. 50ms is still inaudible latency.
+pub const BUFFER_DURATION_MS: u64 = 50;
 pub const CHANNEL_CAPACITY: usize = 64;
 
 /// Samples as interleaved f32.
 pub type AudioFrame = Vec<f32>;
+
+/// RAII guard for 1 ms multimedia timer resolution. Windows' default scheduler
+/// tick is ~15.6 ms, which turns every `thread::sleep(1ms)` in the audio paths
+/// into a 15 ms stall — enough to starve a 50 ms device buffer under jitter.
+/// Standard practice for audio apps; resolution is restored on drop.
+#[cfg(target_os = "windows")]
+pub struct TimerResolutionGuard;
+
+#[cfg(target_os = "windows")]
+impl TimerResolutionGuard {
+    pub fn acquire() -> Self {
+        unsafe {
+            let _ = windows::Win32::Media::timeBeginPeriod(1);
+        }
+        TimerResolutionGuard
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for TimerResolutionGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Media::timeEndPeriod(1);
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -838,6 +867,9 @@ pub mod platform {
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
+        // 1 ms scheduler resolution: thread::sleep(1) is otherwise ~15.6 ms on
+        // Windows, which starves the device buffer between wakeups.
+        let _timer = TimerResolutionGuard::acquire();
 
         unsafe {
             let enumerator: IMMDeviceEnumerator =
