@@ -262,6 +262,11 @@ pub struct ActiveRoute {
     /// the kernel driver's ring buffer (VirtualCapture), falling back to WASAPI loopback.
     pub from_is_virtual: bool,
     pub to_device_id: String,
+    /// True when the DESTINATION is the Nodus virtual microphone — the engine
+    /// writes the route's audio into the kernel driver's mic ring (VirtualRender)
+    /// instead of rendering to a WASAPI endpoint. Detected by the destination
+    /// node's label via `is_nodus_virtual_mic_name`.
+    pub to_is_virtual_mic: bool,
     pub volume: f32,
     pub muted: bool,
     /// Stereo balance of the final edge into the output [-1.0 .. 1.0].
@@ -326,6 +331,10 @@ impl Graph {
                                 exe_name: source_exe.clone(),
                                 from_is_virtual: source_is_virtual,
                                 to_device_id: dest.device_id.clone(),
+                                to_is_virtual_mic:
+                                    crate::audio::virtual_device::is_nodus_virtual_mic_name(
+                                        &dest.label,
+                                    ),
                                 volume,
                                 muted,
                                 pan: route.pan,
@@ -508,6 +517,42 @@ mod tests {
             routes.iter().map(|r| r.from_device_id.as_str()).collect();
         assert_eq!(froms.len(), 2);
         assert!(routes.iter().all(|r| r.to_device_id == "out-dev"));
+    }
+
+    #[test]
+    fn resolve_marks_virtual_mic_destination() {
+        // Destination labelled "Nodus Virtual Mic" → to_is_virtual_mic = true;
+        // ordinary outputs and the Nodus virtual SPEAKER stay false.
+        let mut g = Graph::new();
+        let src = make_node(NodeType::Source, "src-dev");
+        let mic = Node::new(NodeType::Virtual, "Nodus Virtual Mic", "mic-dev");
+        let phones = Node::new(NodeType::Output, "Наушники", "phones-dev");
+        let speaker = Node::new(NodeType::Virtual, "Nodus Virtual Speaker", "spk-dev");
+
+        let sid = src.id.clone();
+        let mid = mic.id.clone();
+        let pid = phones.id.clone();
+        let vid = speaker.id.clone();
+
+        g.add_node(src);
+        g.add_node(mic);
+        g.add_node(phones);
+        g.add_node(speaker);
+        g.add_route(Route::new(sid.clone(), mid)).unwrap();
+        g.add_route(Route::new(sid.clone(), pid)).unwrap();
+        g.add_route(Route::new(sid, vid)).unwrap();
+
+        let routes = g.resolve_device_routes();
+        assert_eq!(routes.len(), 3);
+        for r in &routes {
+            match r.to_device_id.as_str() {
+                "mic-dev" => assert!(r.to_is_virtual_mic, "virtual mic dest must be flagged"),
+                "phones-dev" | "spk-dev" => {
+                    assert!(!r.to_is_virtual_mic, "{} must not be flagged", r.to_device_id)
+                }
+                other => panic!("unexpected destination {other}"),
+            }
+        }
     }
 
     #[test]

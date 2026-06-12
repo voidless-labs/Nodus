@@ -28,6 +28,7 @@ use crate::audio::{
         AudioFrame, AudioRenderer, LoopbackCapture, ProcessLoopbackCapture, SessionError,
     },
     virtual_capture::VirtualCapture,
+    virtual_render::VirtualRender,
     wasapi::AudioFormat,
 };
 use tokio::sync::broadcast;
@@ -88,13 +89,32 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Where a route delivers its audio:
+///   - Wasapi: a real render endpoint (speakers, headphones, VB-Cable, …)
+///   - VirtualMic: the kernel driver's virtual-microphone ring buffer
+/// Both consume the same broadcast receiver and the same vol/mute/pan atomics,
+/// so set_route_volume/mute/pan work identically for either sink.
+enum RouteSink {
+    Wasapi(AudioRenderer),
+    VirtualMic(VirtualRender),
+}
+
+impl RouteSink {
+    fn stop(&self) {
+        match self {
+            RouteSink::Wasapi(r) => r.stop(),
+            RouteSink::VirtualMic(v) => v.stop(),
+        }
+    }
+}
+
 struct RouteHandles {
     volume: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
     /// Stereo balance as f32 bits in [-1.0 .. 1.0] (shared with the render thread).
     pan: Arc<AtomicU32>,
-    /// None for same-device routes (no renderer, capture is suppressed to avoid feedback).
-    renderer: Option<AudioRenderer>,
+    /// None for same-device routes (no sink, capture is suppressed to avoid feedback).
+    sink: Option<RouteSink>,
 }
 
 struct CaptureHandle {
@@ -397,33 +417,54 @@ impl RoutingEngine {
             routes
                 .entry(ar.route_id)
                 .or_default()
-                .push(RouteHandles { volume, muted, pan, renderer: None });
+                .push(RouteHandles { volume, muted, pan, sink: None });
             return Ok(());
         }
 
         let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
         let muted = Arc::new(AtomicBool::new(ar.muted));
         let pan = Arc::new(AtomicU32::new(volume_to_atomic(ar.pan)));
-        // Renderer takes the SOURCE format; AUTOCONVERTPCM remixes/resamples to the
-        // output device. This fixes channel-count / sample-rate mismatch for device
-        // loopback sources whose mix format differs from our default.
-        let renderer = AudioRenderer::new(ar.to_device_id.clone(), capture_format);
-        renderer.start(
-            receiver,
-            Arc::clone(&volume),
-            Arc::clone(&muted),
-            Arc::clone(&pan),
-        );
+
+        let sink = if ar.to_is_virtual_mic {
+            // Destination is the Nodus virtual microphone: write into the kernel
+            // driver's mic ring instead of a WASAPI endpoint (that endpoint is a
+            // CAPTURE device — run_render would rightly refuse it). VirtualRender
+            // converts source format → 48k/stereo/i16 itself. If the driver isn't
+            // loaded, the writer thread warns once and exits — route stays silent
+            // but alive (driverless fallback policy).
+            let vr = VirtualRender::new(capture_format);
+            vr.start(
+                receiver,
+                Arc::clone(&volume),
+                Arc::clone(&muted),
+                Arc::clone(&pan),
+            );
+            RouteSink::VirtualMic(vr)
+        } else {
+            // Renderer takes the SOURCE format; AUTOCONVERTPCM remixes/resamples to the
+            // output device. This fixes channel-count / sample-rate mismatch for device
+            // loopback sources whose mix format differs from our default.
+            let renderer = AudioRenderer::new(ar.to_device_id.clone(), capture_format);
+            renderer.start(
+                receiver,
+                Arc::clone(&volume),
+                Arc::clone(&muted),
+                Arc::clone(&pan),
+            );
+            RouteSink::Wasapi(renderer)
+        };
 
         debug!(
-            "wired route → {} (vol={:.2} muted={} pan={:.2})",
-            ar.to_device_id, ar.volume, ar.muted, ar.pan
+            "wired route → {}{} (vol={:.2} muted={} pan={:.2})",
+            ar.to_device_id,
+            if ar.to_is_virtual_mic { " [virtual mic ring]" } else { "" },
+            ar.volume, ar.muted, ar.pan
         );
 
         routes
             .entry(ar.route_id)
             .or_default()
-            .push(RouteHandles { volume, muted, pan, renderer: Some(renderer) });
+            .push(RouteHandles { volume, muted, pan, sink: Some(sink) });
         Ok(())
     }
 
@@ -435,7 +476,7 @@ impl RoutingEngine {
 
         for (_, handles) in routes.drain() {
             for handle in handles {
-                if let Some(r) = handle.renderer { r.stop(); }
+                if let Some(s) = handle.sink { s.stop(); }
             }
         }
         for (_, handle) in captures.drain() {

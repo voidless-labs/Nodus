@@ -35,6 +35,18 @@ pub fn is_nodus_virtual_name(name: &str) -> bool {
     is_nodus_driver(name)
 }
 
+/// Public: does this device/node name refer to the Nodus VIRTUAL MICROPHONE
+/// endpoint specifically? Matches names containing "nodus" AND ("mic" or
+/// "микрофон"), case-insensitive — covers both the raw endpoint name
+/// ("Nodus Virtual Mic") and the Windows-localized form
+/// ("Микрофон (Nodus Virtual Mic)"). The routing engine uses this to decide
+/// whether a route's DESTINATION should be written into the kernel driver's
+/// mic ring (VirtualRender) instead of a WASAPI render endpoint.
+pub fn is_nodus_virtual_mic_name(name: &str) -> bool {
+    let low = name.to_lowercase();
+    low.contains("nodus") && (low.contains("mic") || low.contains("микрофон"))
+}
+
 /// Map a raw VB-Audio device name to a Nodus-branded label shown in the UI.
 /// Returns None if the device doesn't need renaming.
 pub fn nodus_label(device_name: &str) -> Option<&'static str> {
@@ -316,6 +328,21 @@ mod tests {
     #[test]
     fn real_device_not_renamed() {
         assert_eq!(nodus_label("Realtek HD Audio"), None);
+    }
+
+    #[test]
+    fn virtual_mic_name_detected() {
+        assert!(is_nodus_virtual_mic_name("Nodus Virtual Mic"));
+        assert!(is_nodus_virtual_mic_name("Микрофон (Nodus Virtual Mic)"));
+    }
+
+    #[test]
+    fn virtual_mic_name_rejects_non_mic_endpoints() {
+        // Nodus, but not a microphone.
+        assert!(!is_nodus_virtual_mic_name("Nodus Virtual Speaker"));
+        assert!(!is_nodus_virtual_mic_name("Динамики (Nodus Virtual Audio)"));
+        // A microphone, but not Nodus.
+        assert!(!is_nodus_virtual_mic_name("Микрофон (Realtek High Definition Audio)"));
     }
 
     #[test]

@@ -20,17 +20,15 @@ use tracing::{debug, warn};
 
 use super::session::{AudioFrame, SessionError, CHANNEL_CAPACITY};
 
-// Mirrors common.h — bump together with NODUS_RING_VERSION there.
-const RING_MAGIC: u32 = 0x4E4F_4455; // 'NODU'
-const RING_VERSION: u32 = 2;
-const RING_BYTES: usize = 384_000; // 2 s of 48 kHz stereo 16-bit
-const SECTION_NAME: &str = "Global\\NodusRing-0";
-
 // ── Windows-only implementation ──────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 pub mod platform {
     use super::*;
+    // Shared contract mirror (header layout + constants) — see ring_layout.rs.
+    use crate::audio::ring_layout::{
+        RingHeader, RENDER_SECTION_NAME as SECTION_NAME, RING_BYTES, RING_MAGIC, RING_VERSION,
+    };
     use windows::{
         core::PCWSTR,
         Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ},
@@ -46,22 +44,6 @@ pub mod platform {
     // SAFETY: We only read from the mapping; the driver writes from kernel space.
     unsafe impl Send for RingView {}
     unsafe impl Sync for RingView {}
-
-    // Matches NODUS_RING_BUFFER (pack(8)) in common.h: 64-byte header + data.
-    #[repr(C)]
-    struct RingHeader {
-        magic: u32,           // offset 0
-        version: u32,         // offset 4
-        sample_rate: u32,     // offset 8
-        channels: u16,        // offset 12
-        bits_per_sample: u16, // offset 14
-        ring_bytes: u32,      // offset 16
-        _reserved0: u32,      // offset 20
-        write_bytes: u64,     // offset 24 — driver's monotonic producer counter
-        read_bytes: u64,      // offset 32 — advisory, unused by us
-        _reserved1: [u64; 3], // offset 40
-        data: [u8; RING_BYTES], // offset 64
-    }
 
     impl RingView {
         fn open() -> Result<Self, SessionError> {
@@ -161,27 +143,7 @@ pub mod platform {
         }
     }
 
-    // The driver asserts the same offsets with C_ASSERT in ring.cpp — both sides
-    // pin the contract from common.h independently.
-    #[cfg(test)]
-    mod layout_tests {
-        use super::*;
-        use std::mem::{offset_of, size_of};
-
-        #[test]
-        fn ring_header_layout_matches_common_h() {
-            assert_eq!(offset_of!(RingHeader, magic), 0);
-            assert_eq!(offset_of!(RingHeader, version), 4);
-            assert_eq!(offset_of!(RingHeader, sample_rate), 8);
-            assert_eq!(offset_of!(RingHeader, channels), 12);
-            assert_eq!(offset_of!(RingHeader, bits_per_sample), 14);
-            assert_eq!(offset_of!(RingHeader, ring_bytes), 16);
-            assert_eq!(offset_of!(RingHeader, write_bytes), 24);
-            assert_eq!(offset_of!(RingHeader, read_bytes), 32);
-            assert_eq!(offset_of!(RingHeader, data), 64);
-            assert_eq!(size_of::<RingHeader>(), 64 + RING_BYTES);
-        }
-    }
+    // Layout/constant tests for the shared contract mirror live in ring_layout.rs.
 
     // ── Public capture handle ────────────────────────────────────────────────
 
@@ -278,19 +240,3 @@ pub mod platform {
 }
 
 pub use platform::VirtualCapture;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The layout constants must stay in lockstep with driver/nodus_audio/common.h.
-    #[test]
-    fn ring_constants_match_contract() {
-        assert_eq!(RING_MAGIC, 0x4E4F_4455);
-        assert_eq!(RING_VERSION, 2);
-        // 2 seconds * 48000 frames * 2 ch * 2 bytes
-        assert_eq!(RING_BYTES, 2 * 48_000 * 2 * 2);
-        assert_eq!(SECTION_NAME, "Global\\NodusRing-0");
-    }
-
-}
