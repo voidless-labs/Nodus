@@ -1,0 +1,30 @@
+/* Canvas.css — the backdrop layers. All static (no animation). */
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  background: var(--color-canvas);
+  overflow: hidden;
+}
+
+/* Dim dot grid: one dot per --dot-grid-step tile, painted by the GPU once. */
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, var(--color-dot) 1px, transparent 1.4px);
+  background-size: var(--dot-grid-step) var(--dot-grid-step);
+  background-position: center;
+}
+
+/* Soft darkening toward the edges so the surface reads as a focused workspace. */
+.canvas-vignette {
+  position: absolute;
+  inset: 0;
+  background: var(--vignette);
+  pointer-events: none;
+}
+
+.canvas-content {
+  position: absolute;
+  inset: 0;
+}
