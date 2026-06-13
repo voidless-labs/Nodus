@@ -1,3 +1,4 @@
+pub mod device_control;
 pub mod devices;
 pub(crate) mod ring_layout;
 pub mod session;

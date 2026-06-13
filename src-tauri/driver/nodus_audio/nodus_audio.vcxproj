@@ -78,6 +78,7 @@
     <ClCompile Include="minwavecapstream.cpp" />
     <ClCompile Include="mintopocap.cpp" />
     <ClCompile Include="ring.cpp" />
+    <ClCompile Include="nodus_control.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -90,6 +91,8 @@
     <ClInclude Include="mintopocap.h" />
     <ClInclude Include="common.h" />
     <ClInclude Include="ring.h" />
+    <ClInclude Include="nodus_ioctl.h" />
+    <ClInclude Include="nodus_control.h" />
   </ItemGroup>
 
   <ItemGroup>

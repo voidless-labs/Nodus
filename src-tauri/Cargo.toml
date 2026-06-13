@@ -33,6 +33,10 @@ path = "src/bin/ring_play.rs"
 name = "ring-tone"
 path = "src/bin/ring_tone.rs"
 
+[[bin]]
+name = "device-ctl"
+path = "src/bin/device_ctl.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
@@ -69,6 +73,11 @@ windows = { version = "0.58", features = [
     "Win32_Storage_StructuredStorage",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    # t5 control channel (device_control.rs): CfgMgr32 interface discovery,
+    # CreateFileW on the interface path, DeviceIoControl.
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
 ] }
 
 [features]

@@ -7,6 +7,9 @@
 #include "mintopo.h"
 #include "minwavecap.h"
 #include "mintopocap.h"
+// INITGUID is in effect here, so including this emits the storage for
+// GUID_DEVINTERFACE_NODUS_CONTROL (same pattern as the PortCls GUIDs above).
+#include "nodus_control.h"
 
 typedef NTSTATUS (*PFN_CREATE_MINIPORT)(PUNKNOWN*, PUNKNOWN);
 
@@ -102,6 +105,12 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
 
     if (topoCapPort) topoCapPort->Release();
     if (waveCapPort) waveCapPort->Release();
+
+    // ── Control channel (t5): register + enable the IOCTL device interface.
+    //    Strictly non-fatal — the field-proven endpoints above must come up
+    //    even if the control channel completely fails to materialize. ──
+    NodusControlEnableInterface(DeviceObject);
+
     DbgPrint("Nodus: StartDevice end status=0x%08X (capture=0x%08X)\n", status, capStatus);
     return status;
 }
@@ -109,10 +118,30 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
 extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObject)
 {
     // Four subdevices: render wave + topology, capture wave + topology.
-    return PcAddAdapterDevice(DriverObject, PhysicalDeviceObject, StartDevice, 4, 0);
+    NTSTATUS status = PcAddAdapterDevice(DriverObject, PhysicalDeviceObject, StartDevice, 4, 0);
+    if (NT_SUCCESS(status)) {
+        // Capture the PDO so StartDevice can register the control interface on it
+        // (first devnode wins; clears any stale Removing flag). Non-fatal.
+        NodusControlOnAddDevice(PhysicalDeviceObject);
+    }
+    return status;
 }
 
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    return PcInitializeAdapterDriver(DriverObject, RegistryPath, (PDRIVER_ADD_DEVICE)AddDevice);
+    // Zero the adapter context + init its mutex before anything can run.
+    NodusControlInit();
+
+    NTSTATUS status =
+        PcInitializeAdapterDriver(DriverObject, RegistryPath, (PDRIVER_ADD_DEVICE)AddDevice);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // PcInitializeAdapterDriver pointed every dispatch slot at PcDispatchIrp.
+    // Re-point the two we extend; our dispatchers chain everything foreign back
+    // to PcDispatchIrp, so KS/PortCls traffic is untouched (ADR §3.1).
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = NodusDispatchDeviceControl;
+    DriverObject->MajorFunction[IRP_MJ_PNP]            = NodusDispatchPnp;
+    return STATUS_SUCCESS;
 }
