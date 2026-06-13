@@ -12,33 +12,31 @@
 
 #[cfg(target_os = "windows")]
 fn main() {
-    use nodus::audio::device_control::{
-        open_control, ControlError, CTL_VERSION, GUID_DEVINTERFACE_NODUS_CONTROL_STR,
-    };
+    use nodus::audio::device_control::{open_control, ControlError, CTL_VERSION};
 
     println!("=== Nodus device control check (t5) ===");
-    println!("Looking for control interface {GUID_DEVINTERFACE_NODUS_CONTROL_STR} ...");
+    println!(r"Opening control device \\.\NodusControl ...");
 
     let ctl = match open_control() {
         Ok(ctl) => ctl,
         Err(ControlError::InterfaceNotFound) => {
-            println!("FAIL: control interface not found.");
+            println!("FAIL: control device not found.");
             println!("  Two distinct cases lead here:");
             println!("  - the driver is not installed at all: check Device Manager for");
             println!("    'Nodus Virtual Audio' (ROOT\\NodusVirtualAudio), reinstall via install.ps1;");
-            println!("  - the driver IS installed but it is an older build (t1-t4) without");
-            println!("    the control channel: sound/rings work, this tool does not —");
-            println!("    update the driver to a t5 step-2+ build.");
+            println!("  - the driver IS installed but it is an older build (t1-t4, or the");
+            println!("    t5 step-2 build whose control channel could not be opened): sound");
+            println!("    and rings work, this tool does not — update to a t5 step-2b+ build.");
             std::process::exit(1);
         }
         Err(e) => {
-            println!("FAIL: cannot open the control interface: {e}");
-            println!("  The interface was found, so the driver is a t5 build — this is an");
-            println!("  open/permission problem, not a missing driver. DebugView may help.");
+            println!("FAIL: cannot open the control device: {e}");
+            println!("  The device exists but the open failed — a permission/SDDL problem,");
+            println!("  not a missing driver. DebugView ('Nodus: ioctl' lines) may help.");
             std::process::exit(1);
         }
     };
-    println!("Interface found and opened.\n");
+    println!("Control device opened.\n");
 
     // 1) QUERY_VERSION — always first (ADR §4.3).
     let info = match ctl.query_version() {

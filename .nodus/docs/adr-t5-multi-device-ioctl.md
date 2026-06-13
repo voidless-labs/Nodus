@@ -96,7 +96,31 @@
 
 ## 3. Контрольный канал
 
-### 3.1 Как встроить IOCTL в PortCls-драйвер
+> **ОБНОВЛЕНО 13.06.2026 (step 2b, по итогам полевого smoke-теста).**
+> Исходный план §3.1 (повесить IOCTL на FDO PortCls + собственный device
+> interface на PDO, БЕЗ отдельного устройства) **провалился в поле**: интерфейс
+> регистрируется и включается (CfgMgr32 его находит), но `CreateFileW` даёт
+> `FILE_NOT_FOUND` — открытием хэндла (`IRP_MJ_CREATE`) на FDO владеет KS/PortCls
+> и отвергает open «чужого» для него интерфейса.
+>
+> **Принято: отдельное контрол-устройство.** В `DriverEntry` (после
+> `PcInitializeAdapterDriver`) — `IoCreateDeviceSecure` `\Device\NodusControl`
+> с SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)` (SYSTEM/Admins — всё,
+> World — read+write, т.е. open+ioctl без elevation, §4.2) + symlink
+> `\DosDevices\NodusControl`. Userspace открывает `\\.\NodusControl` напрямую
+> (CfgMgr32 больше не нужен). Перехватываем ЧЕТЫРЕ dispatch-точки: CREATE/CLOSE
+> (для нашего устройства — успех, иначе `PcDispatchIrp`), DEVICE_CONTROL
+> (наше устройство → обработчики, иначе KS), PNP (teardown аудио-FDO). Устройство
+> живёт, пока загружен драйвер (создание в DriverEntry, удаление в DriverUnload),
+> т.е. канал доступен и во время PnP-переходов devnode. Отвергнутая ранее
+> альтернатива «отдельное устройство» возвращена — её минус (второй lifecycle)
+> на практике меньше, чем фатальный изъян хука на FDO. Реализовано:
+> `nodus_control.cpp` (NodusControlCreateDevice/DeleteDevice, NodusDispatch*),
+> `device_control.rs` (open `\\.\NodusControl`).
+>
+> Ниже — исходный текст §3.1 (хук на FDO), оставлен как история решения.
+
+### 3.1 Как встроить IOCTL в PortCls-драйвер (ИСХОДНЫЙ ПЛАН — заменён step 2b)
 
 `PcInitializeAdapterDriver` забирает все dispatch-точки под `PcDispatchIrp`
 (через него идут все KS property-вызовы как `IOCTL_KS_*`). Стандартный приём —

@@ -61,7 +61,7 @@
     <Link>
       <!-- Audio kernel libraries. stdunk.lib provides the CUnknown base-class
            implementation (constructor/destructor + NonDelegating* methods). -->
-      <AdditionalDependencies>portcls.lib;stdunk.lib;ks.lib;ksguid.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>portcls.lib;stdunk.lib;ks.lib;ksguid.lib;ntstrsafe.lib;wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>

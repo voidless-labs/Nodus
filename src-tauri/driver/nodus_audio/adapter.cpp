@@ -106,10 +106,9 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     if (topoCapPort) topoCapPort->Release();
     if (waveCapPort) waveCapPort->Release();
 
-    // ── Control channel (t5): register + enable the IOCTL device interface.
-    //    Strictly non-fatal — the field-proven endpoints above must come up
-    //    even if the control channel completely fails to materialize. ──
-    NodusControlEnableInterface(DeviceObject);
+    // ── Control channel (t5): capture the audio FDO (the control DEVICE itself
+    //    is created in DriverEntry, independent of this devnode). Non-fatal. ──
+    NodusControlOnStartDevice(DeviceObject);
 
     DbgPrint("Nodus: StartDevice end status=0x%08X (capture=0x%08X)\n", status, capStatus);
     return status;
@@ -127,6 +126,15 @@ extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT Physic
     return status;
 }
 
+// Driver unload: delete the standalone control device + symlink. PortCls does
+// not install its own DriverUnload (it cleans up per-devnode via PnP), so this
+// is ours to provide; by unload time the audio devnodes are already removed.
+extern "C" VOID NodusDriverUnload(PDRIVER_OBJECT DriverObject)
+{
+    UNREFERENCED_PARAMETER(DriverObject);
+    NodusControlDeleteDevice();
+}
+
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     // Zero the adapter context + init its mutex before anything can run.
@@ -139,9 +147,18 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Reg
     }
 
     // PcInitializeAdapterDriver pointed every dispatch slot at PcDispatchIrp.
-    // Re-point the two we extend; our dispatchers chain everything foreign back
-    // to PcDispatchIrp, so KS/PortCls traffic is untouched (ADR §3.1).
+    // Re-point the ones we extend; our dispatchers route the control device to
+    // our handlers and chain everything foreign (the PortCls FDOs) back to
+    // PcDispatchIrp, so KS/PortCls traffic is untouched (ADR §3.1 revised).
+    DriverObject->MajorFunction[IRP_MJ_CREATE]         = NodusDispatchCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = NodusDispatchCreateClose;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = NodusDispatchDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_PNP]            = NodusDispatchPnp;
+    DriverObject->DriverUnload                         = NodusDriverUnload;
+
+    // Create the standalone control device now (non-fatal: the audio endpoints
+    // work even if this fails; userspace just can't manage virtual devices).
+    NTSTATUS ctlStatus = NodusControlCreateDevice(DriverObject);
+    DbgPrint("Nodus: DriverEntry control device status=0x%08X\n", ctlStatus);
     return STATUS_SUCCESS;
 }

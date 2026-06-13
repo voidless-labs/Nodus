@@ -359,11 +359,7 @@ pub mod platform {
     use std::mem::size_of;
 
     use windows::{
-        core::PCWSTR,
-        Win32::Devices::DeviceAndDriverInstallation::{
-            CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CR_SUCCESS,
-        },
+        core::{w, PCWSTR},
         Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE},
         Win32::Storage::FileSystem::{
             CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -371,6 +367,16 @@ pub mod platform {
         },
         Win32::System::IO::DeviceIoControl,
     };
+
+    // HRESULT_FROM_WIN32 of the "device/path not present" Win32 errors — the
+    // driver is absent or is an older build without the control device.
+    const HR_FILE_NOT_FOUND: i32 = 0x8007_0002u32 as i32; // ERROR_FILE_NOT_FOUND
+    const HR_PATH_NOT_FOUND: i32 = 0x8007_0003u32 as i32; // ERROR_PATH_NOT_FOUND
+
+    /// Win32 path of the driver's control device. The driver creates
+    /// `\Device\NodusControl` + a `\DosDevices\NodusControl` symlink
+    /// (nodus_control.cpp); `\\.\NodusControl` is the user-mode form.
+    const CONTROL_PATH: PCWSTR = w!(r"\\.\NodusControl");
 
     /// Translate the Win32 errors that the documented NTSTATUS codes (ADR §5)
     /// map to into actionable hints.
@@ -402,8 +408,8 @@ pub mod platform {
         unsafe { std::slice::from_raw_parts_mut(v as *mut T as *mut u8, size_of::<T>()) }
     }
 
-    /// Open handle to the driver's control channel (the audio FDO itself —
-    /// no separate control device, ADR §3.1).
+    /// Open handle to the driver's standalone control device
+    /// (`\\.\NodusControl`, ADR §3.1 revised / step 2b).
     pub struct DeviceControl {
         handle: HANDLE,
     }
@@ -414,17 +420,14 @@ pub mod platform {
     unsafe impl Sync for DeviceControl {}
 
     impl DeviceControl {
-        /// Find the control interface by GUID (CfgMgr32, ADR §3.2) and open it.
+        /// Open the control device by its fixed symlink. A missing device
+        /// (driver not installed, or an older build without the control
+        /// device) surfaces as `InterfaceNotFound` so callers can tell it
+        /// apart from a real open/permission failure.
         pub fn open() -> Result<Self, ControlError> {
-            let path = Self::interface_path()?;
-
-            // CreateFileW wants a NUL-terminated wide string.
-            let mut wide: Vec<u16> = path.clone();
-            wide.push(0);
-
             let handle = unsafe {
                 CreateFileW(
-                    PCWSTR(wide.as_ptr()),
+                    CONTROL_PATH,
                     GENERIC_READ.0 | GENERIC_WRITE.0,
                     FILE_SHARE_READ | FILE_SHARE_WRITE,
                     None,
@@ -434,59 +437,15 @@ pub mod platform {
                 )
             }
             .map_err(|e| {
-                ControlError::Open(format!(
-                    "{e} (path {})",
-                    String::from_utf16_lossy(&path)
-                ))
+                let hr = e.code().0;
+                if hr == HR_FILE_NOT_FOUND || hr == HR_PATH_NOT_FOUND {
+                    ControlError::InterfaceNotFound
+                } else {
+                    ControlError::Open(format!("{e} (path \\\\.\\NodusControl)"))
+                }
             })?;
 
             Ok(Self { handle })
-        }
-
-        /// First present interface path for GUID_DEVINTERFACE_NODUS_CONTROL,
-        /// as a wide string WITHOUT the trailing NUL.
-        fn interface_path() -> Result<Vec<u16>, ControlError> {
-            unsafe {
-                let mut len: u32 = 0;
-                let cr = CM_Get_Device_Interface_List_SizeW(
-                    &mut len,
-                    &GUID_DEVINTERFACE_NODUS_CONTROL,
-                    PCWSTR::null(),
-                    CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-                );
-                if cr != CR_SUCCESS {
-                    return Err(ControlError::CfgMgr {
-                        call: "CM_Get_Device_Interface_List_SizeW",
-                        cr: cr.0,
-                    });
-                }
-                // An empty multi-sz is a single NUL (len <= 1): no interface.
-                if len <= 1 {
-                    return Err(ControlError::InterfaceNotFound);
-                }
-
-                let mut buf = vec![0u16; len as usize];
-                let cr = CM_Get_Device_Interface_ListW(
-                    &GUID_DEVINTERFACE_NODUS_CONTROL,
-                    PCWSTR::null(),
-                    &mut buf,
-                    CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-                );
-                if cr != CR_SUCCESS {
-                    return Err(ControlError::CfgMgr {
-                        call: "CM_Get_Device_Interface_ListW",
-                        cr: cr.0,
-                    });
-                }
-
-                // The buffer is a multi-sz; the adapter is single-instance
-                // (ADR §3.2), so take the first entry.
-                let first: Vec<u16> = buf.iter().copied().take_while(|&c| c != 0).collect();
-                if first.is_empty() {
-                    return Err(ControlError::InterfaceNotFound);
-                }
-                Ok(first)
-            }
         }
 
         /// One METHOD_BUFFERED round-trip; checks that the driver filled the

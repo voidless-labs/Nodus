@@ -26,6 +26,12 @@
   со своим SDDL (доступ обычному пользователю) + symlink/интерфейс на НЁМ; наш create/
   close/devicecontrol на этом device object, KS не мешает. ADR обновить (вернуть
   отвергнутую альтернативу с обоснованием от поля).
+- ✅ СДЕЛАНО 13.06.2026 (step 2b): `\Device\NodusControl` + symlink
+  `\\.\NodusControl`, SDDL SYSTEM/Admins=all, World=RW; перехват CREATE/CLOSE/
+  DEVICE_CONTROL/PNP с маршрутизацией по DeviceObject; создание в DriverEntry,
+  удаление в DriverUnload. Rust открывает `\\.\NodusControl` напрямую (CfgMgr32
+  убран). ADR §3 обновлён. cargo test 65/65, собрано локально (Rust) — kernel ждёт CI.
+  Полевой smoke: `device-ctl.exe` → версия 1 + 2 статических устройства.
 
 ## Технические заметки (для меня)
 - Путь выбран (см. разбор в чате 11.06): один devnode, динамические subdevice.

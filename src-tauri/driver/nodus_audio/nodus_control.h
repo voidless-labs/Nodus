@@ -1,25 +1,33 @@
 #pragma once
-// Control channel of the Nodus adapter (t5): IOCTL hook on the PortCls FDO.
+// Control channel of the Nodus adapter (t5): a STANDALONE control device object
+// for the IOCTL protocol, separate from the PortCls audio FDO.
 //
-// Design: .nodus/docs/adr-t5-multi-device-ioctl.md §3 — DriverEntry re-points
-// IRP_MJ_DEVICE_CONTROL / IRP_MJ_PNP at our dispatchers AFTER
-// PcInitializeAdapterDriver installed PcDispatchIrp; everything that is not
-// ours (all KS traffic = FILE_DEVICE_KS IOCTLs, all other PnP minors) chains
-// to PcDispatchIrp untouched. The audio data path does not know this file
-// exists: no hot-path code takes the control mutex.
+// Why not hook the PortCls FDO directly (the original ADR §3.1 plan): a custom
+// device interface registered on the audio FDO cannot be OPENED from userspace —
+// IRP_MJ_CREATE on that device object is owned by KS/PortCls, which rejects an
+// open that is not for one of its KS objects (field smoke test 13.06: the
+// interface was found by CfgMgr32 but CreateFileW failed with FILE_NOT_FOUND).
+//
+// Fix (ADR §3.1 revised, "step 2b"): IoCreateDeviceSecure a dedicated control
+// device `\Device\NodusControl` with a symlink `\DosDevices\NodusControl`
+// (userspace opens `\\.\NodusControl`) and an SDDL that lets a non-elevated
+// process open it. We own IRP_MJ_CREATE/CLOSE/DEVICE_CONTROL for THIS device
+// object; everything addressed to the PortCls FDOs chains to PcDispatchIrp
+// untouched. The audio data path never takes the control mutex.
 
 #include "nodus.h"
 #include "nodus_ioctl.h"
 
-// One adapter, global context (ADR §3.2: the driver is single-devnode by
-// architecture; a second devnode comes up with working audio but without the
-// control channel — logged, not fatal). Guarded by Mutex; everything PASSIVE.
+// One adapter, global context. The control device lives for as long as the
+// driver is loaded (created in DriverEntry, deleted in DriverUnload), so the
+// control channel is reachable even while the audio devnode is transitioning.
+// Guarded by Mutex; everything PASSIVE.
 typedef struct _NODUS_ADAPTER_CONTEXT {
-    PDEVICE_OBJECT Pdo;   // captured in AddDevice (interface registration target)
-    PDEVICE_OBJECT Fdo;   // captured in StartDevice (PnP-remove correlation)
-    UNICODE_STRING ControlSymlink;   // from IoRegisterDeviceInterface; freed on REMOVE
-    BOOLEAN        ControlInterfaceActive;
-    BOOLEAN        Removing;         // set under Mutex on REMOVE/SURPRISE_REMOVAL;
+    PDEVICE_OBJECT ControlDevice;    // standalone IOCTL device (\Device\NodusControl)
+    BOOLEAN        SymlinkCreated;   // \DosDevices\NodusControl present
+    PDEVICE_OBJECT Pdo;              // audio devnode PDO (captured in AddDevice)
+    PDEVICE_OBJECT Fdo;              // audio FDO (captured in StartDevice; step 3 subdevice install)
+    BOOLEAN        Removing;         // set under Mutex on the audio FDO REMOVE;
                                      // any Nodus IOCTL afterwards -> STATUS_DEVICE_NOT_READY
     KMUTEX         Mutex;            // serializes CREATE/DESTROY/LIST and PnP-remove
 
@@ -33,15 +41,22 @@ extern NODUS_ADAPTER_CONTEXT g_NodusAdapter;
 // DriverEntry, before PcInitializeAdapterDriver: zero the context, init the mutex.
 VOID NodusControlInit(VOID);
 
-// AddDevice, after a successful PcAddAdapterDevice: capture the PDO (first
-// devnode wins) and clear Removing for the fresh devnode instance.
+// DriverEntry, after PcInitializeAdapterDriver: create the control device +
+// symlink. Non-fatal — the audio endpoints work even if this fails.
+NTSTATUS NodusControlCreateDevice(_In_ PDRIVER_OBJECT DriverObject);
+
+// DriverUnload: delete the symlink + control device.
+VOID NodusControlDeleteDevice(VOID);
+
+// AddDevice: capture the audio PDO (first devnode wins; clears Removing).
 VOID NodusControlOnAddDevice(_In_ PDEVICE_OBJECT Pdo);
 
-// StartDevice, after the render half is up: register + enable the control
-// device interface. Never fails the caller — errors are logged and the
-// endpoints keep working without the control channel.
-VOID NodusControlEnableInterface(_In_ PDEVICE_OBJECT Fdo);
+// StartDevice: capture the audio FDO (used by step 3 for runtime subdevice
+// registration, and to correlate the PnP-remove below).
+VOID NodusControlOnStartDevice(_In_ PDEVICE_OBJECT Fdo);
 
-// Driver-wide dispatchers (chain to PcDispatchIrp for everything foreign).
-DRIVER_DISPATCH NodusDispatchDeviceControl;
-DRIVER_DISPATCH NodusDispatchPnp;
+// Driver-wide dispatchers. Each routes the control device to our handlers and
+// everything else (the PortCls FDOs) to PcDispatchIrp.
+DRIVER_DISPATCH NodusDispatchCreateClose;   // IRP_MJ_CREATE / IRP_MJ_CLOSE
+DRIVER_DISPATCH NodusDispatchDeviceControl; // IRP_MJ_DEVICE_CONTROL
+DRIVER_DISPATCH NodusDispatchPnp;           // IRP_MJ_PNP (audio FDO remove teardown)
