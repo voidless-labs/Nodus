@@ -37,6 +37,10 @@ path = "src/bin/ring_tone.rs"
 name = "device-ctl"
 path = "src/bin/device_ctl.rs"
 
+[[bin]]
+name = "mic-route"
+path = "src/bin/mic_route.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
