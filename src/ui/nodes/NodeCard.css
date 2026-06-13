@@ -1,0 +1,216 @@
+/* NodeCard.css — node anatomy, states and the cursor-reactive border. */
+
+.node {
+  position: absolute;
+  width: 244px;
+  font-family: var(--font-family);
+  user-select: none;
+  /* --type-color is set inline per node; --mx/--my by the move handler. */
+  --mx: 50%;
+  --my: 0%;
+}
+
+/* ── Label above the card ─────────────────────────────────────── */
+.node-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 7px 4px;
+  font-size: var(--font-size-label);
+  color: var(--color-text-secondary);
+  letter-spacing: 0.3px;
+}
+.node-label-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--type-color);
+}
+
+/* ── Card ─────────────────────────────────────────────────────── */
+.node-card {
+  position: relative;
+  border-radius: var(--radius-node);
+  background: linear-gradient(180deg, rgba(28, 28, 33, 0.92), rgba(20, 20, 24, 0.92));
+  border: 1px solid var(--color-node-border);
+  box-shadow: var(--shadow-node);
+  padding: 13px 14px 14px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+/* Cursor-reactive frosted border: a 1px gradient ring whose bright spot
+   follows the pointer, tinted with the node's type color. Static otherwise. */
+.node-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(
+    180px circle at var(--mx) var(--my),
+    color-mix(in srgb, var(--type-color) 55%, transparent),
+    transparent 60%
+  );
+  /* show only the 1px ring, not the fill */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+}
+.node-card:hover .node-glow {
+  opacity: 0.9;
+}
+
+/* ── Head: icon + titles + mute ───────────────────────────────── */
+.node-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.node-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--type-color);
+}
+.node-icon-letter {
+  font-size: 15px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.node-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.node-name {
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node-sub {
+  font-size: var(--font-size-label);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+.node-mute {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.node-mute:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── VU meter ─────────────────────────────────────────────────── */
+.node-meter {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 12px 0 11px;
+  overflow: hidden;
+}
+.node-meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--type-color);
+  transition: width 90ms linear;
+}
+
+/* ── Volume slider ────────────────────────────────────────────── */
+.node-vol {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.node-slider {
+  flex: 1 1 auto;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+.node-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.node-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  border: none;
+}
+.node-vol-pct {
+  flex: 0 0 auto;
+  font-size: var(--font-size-label);
+  color: var(--color-text-secondary);
+  width: 30px;
+  text-align: right;
+}
+
+/* ── Ports ────────────────────────────────────────────────────── */
+.node-port {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--type-color);
+  border: 2px solid var(--color-canvas);
+  transform: translateY(-50%);
+}
+.node-port--in {
+  left: -5px;
+}
+.node-port--out {
+  right: -5px;
+}
+
+/* ── States ───────────────────────────────────────────────────── */
+.node.is-active .node-card {
+  border-color: color-mix(in srgb, var(--type-color) 45%, var(--color-node-border));
+  box-shadow: var(--shadow-node), 0 0 18px -2px color-mix(in srgb, var(--type-color) 35%, transparent);
+}
+.node.is-muted .node-card {
+  opacity: 0.6;
+}
+.node.is-muted .node-meter-fill {
+  background: var(--color-text-muted);
+}
+.node.is-idle .node-card {
+  opacity: 0.45;
+}
+.node.is-idle .node-label-dot,
+.node.is-idle .node-port {
+  background: var(--color-text-muted);
+}
