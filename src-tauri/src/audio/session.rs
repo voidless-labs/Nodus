@@ -990,7 +990,15 @@ pub mod platform {
                         // with zeros or the buffer fills up and drops incoming audio frames.
                         std::thread::sleep(Duration::from_millis(1));
                     }
-                    Err(_) => break, // sender dropped
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                        // Fell behind the producer — e.g. the ~700 ms WASAPI init
+                        // let the 64-frame channel overflow while music was already
+                        // playing. Skip the dropped frames and keep rendering;
+                        // tearing the render down here was a real "no audio" bug.
+                        debug!("render lagged {n} frames on {device_id}, continuing");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break, // sender dropped
                 }
             }
 
