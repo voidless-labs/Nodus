@@ -22,7 +22,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: false,
     hasOutput: true,
     x: 60,
-    y: 120,
+    y: 110,
   },
   {
     id: 'mic',
@@ -35,7 +35,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: false,
     hasOutput: true,
     x: 60,
-    y: 300,
+    y: 340,
   },
   {
     id: 'game',
@@ -49,7 +49,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: false,
     hasOutput: true,
     x: 60,
-    y: 480,
+    y: 570,
   },
   {
     id: 'headphones',
@@ -62,7 +62,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: true,
     hasOutput: false,
     x: 560,
-    y: 120,
+    y: 110,
   },
   {
     id: 'obs',
@@ -75,7 +75,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: true,
     hasOutput: false,
     x: 560,
-    y: 300,
+    y: 340,
   },
   {
     id: 'nodusmic',
@@ -89,7 +89,7 @@ const SAMPLE_NODES: NodeModel[] = [
     hasInput: true,
     hasOutput: false,
     x: 560,
-    y: 480,
+    y: 570,
   },
 ];
 

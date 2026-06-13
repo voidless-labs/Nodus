@@ -1,6 +1,5 @@
 /* NodeCard.css — node anatomy, states and the cursor-reactive border.
-   Tuned to Node-design-v2: spacious card, bold name, labelled inset meter,
-   mute on the bottom row, larger slider thumb. */
+   Matched 1:1 to the owner's Node-design-v2 reference and exact color specs. */
 
 .node {
   position: absolute;
@@ -29,20 +28,20 @@
   background: var(--type-color);
 }
 
-/* ── Card (the frosted outer frame) ───────────────────────────── */
+/* ── Card: solid fill, no gradient ────────────────────────────── */
 .node-card {
   position: relative;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(30, 30, 36, 0.95), rgba(19, 19, 23, 0.95));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: var(--shadow-node), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border-radius: 16px;
+  background: var(--color-node-bg);
+  border: 1px solid var(--color-node-border);
+  box-shadow: var(--shadow-node);
   padding: 18px;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
     opacity var(--transition-fast);
 }
 
-/* Cursor-reactive frosted border: a 1px gradient ring whose bright spot
-   follows the pointer, tinted with the node's type color. Static otherwise. */
+/* Cursor-reactive border: a 1px gradient ring whose bright spot follows the
+   pointer, tinted with the node's type color. Static otherwise. */
 .node-glow {
   position: absolute;
   inset: 0;
@@ -78,14 +77,14 @@
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  color: var(--type-color);
+  background: var(--color-icon-bg);
+  border: 1px solid var(--color-icon-border);
+  color: var(--color-icon-letter);
 }
 .node-icon-letter {
   font-size: 18px;
   font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
+  color: var(--color-icon-letter);
 }
 .node-titles {
   flex: 1 1 auto;
@@ -109,35 +108,38 @@
   margin-top: 2px;
 }
 
-/* ── Meter block (labelled, recessed track) ───────────────────── */
+/* ── Meter block: a recessed panel holding the label + bar ────── */
 .node-meter-block {
-  margin: 16px 0 14px;
+  margin: 15px 0 14px;
+  padding: 11px 12px 12px;
+  background: var(--color-node-inset);
+  border: 1px solid var(--color-node-inset-border);
+  border-radius: 10px;
 }
 .node-meter-label {
   font-size: var(--font-size-label);
   color: var(--color-text-secondary);
-  margin: 0 0 7px 1px;
+  margin: 0 0 8px 1px;
 }
 .node-meter {
-  height: 7px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.32);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
 .node-meter-fill {
   height: 100%;
-  border-radius: 4px;
+  border-radius: 3px;
   background: var(--type-color);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--type-color) 70%, transparent);
+  box-shadow: 0 0 7px -1px color-mix(in srgb, var(--type-color) 65%, transparent);
   transition: width 90ms linear;
 }
 
-/* ── Bottom row: mute + slider + percent ──────────────────────── */
+/* ── Bottom row: round mute + slider + percent ────────────────── */
 .node-vol {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
 }
 .node-mute {
   flex: 0 0 auto;
@@ -145,17 +147,20 @@
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--color-icon-border);
+  background: var(--color-icon-bg);
   color: var(--color-text-secondary);
-  border-radius: 10px;
+  border-radius: 50%;
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast),
     border-color var(--transition-fast);
 }
+.node-mute svg {
+  transform: translateX(1px); /* the speaker glyph is left-weighted — optically center it */
+}
 .node-mute:hover {
   color: var(--color-text-primary);
-  background: rgba(255, 255, 255, 0.07);
+  background: #202024;
 }
 .node-slider {
   flex: 1 1 auto;
@@ -210,9 +215,10 @@
 }
 
 /* ── States ───────────────────────────────────────────────────── */
+/* Active = a soft type-color glow near the card (subtle, like the reference);
+   the border stays neutral. */
 .node.is-active .node-card {
-  border-color: color-mix(in srgb, var(--type-color) 40%, rgba(255, 255, 255, 0.07));
-  box-shadow: var(--shadow-node), 0 0 22px -4px color-mix(in srgb, var(--type-color) 35%, transparent);
+  box-shadow: var(--shadow-node), 0 0 20px -6px color-mix(in srgb, var(--type-color) 45%, transparent);
 }
 .node.is-muted .node-card {
   opacity: 0.6;

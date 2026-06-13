@@ -6,8 +6,15 @@
   /* ── Backgrounds ─────────────────────────────────────────────── */
   --color-canvas:      #0E0E10;   /* the canvas itself */
   --color-surface:     #141416;   /* mid surfaces (panels, popovers) */
-  --color-node-bg:     #1A1A1E;   /* node card */
-  --color-node-border: #2A2A30;   /* node border (1px) */
+  --color-node-bg:     #161619;   /* node card — solid, no gradient (rgba 22,22,25) */
+  --color-node-border: #26262B;   /* node border (1px) */
+
+  /* node internals (exact values from the owner reference) */
+  --color-node-inset:        #121215;  /* recessed panel bg (input level) — rgba 18,18,21 */
+  --color-node-inset-border: #252527;  /* recessed panel border — rgba 37,37,39 */
+  --color-icon-bg:           #1B1B1F;  /* app-icon square bg — rgba 27,27,31 */
+  --color-icon-border:       #2D2D31;  /* app-icon square border — rgba 45,45,49 */
+  --color-icon-letter:       #8C8C95;  /* app-icon letter — rgba 140,140,149 */
 
   /* canvas texture */
   --color-dot:         rgba(255, 255, 255, 0.045);  /* dot-grid dot */
