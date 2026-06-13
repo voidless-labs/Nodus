@@ -58,3 +58,12 @@ export interface NodeModel {
   hasInput?: boolean;
   hasOutput?: boolean;
 }
+
+/** One wire from a source node's output port to a target node's input port. */
+export interface EdgeModel {
+  id: string;
+  from: string; // source node id (output port)
+  to: string; // target node id (input port)
+  active?: boolean; // audio flowing → brighter + faint glow
+  muted?: boolean; // dashed, dim red
+}

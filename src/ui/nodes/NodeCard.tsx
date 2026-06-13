@@ -63,8 +63,12 @@ export function NodeCard({ node }: { node: NodeModel }) {
       <div className="node-card" ref={cardRef} onMouseMove={onMove}>
         <div className="node-glow" aria-hidden />
 
-        {node.hasInput !== false && <span className="node-port node-port--in" />}
-        {node.hasOutput !== false && <span className="node-port node-port--out" />}
+        {node.hasInput !== false && (
+          <span className="node-port node-port--in" data-node={node.id} data-side="in" />
+        )}
+        {node.hasOutput !== false && (
+          <span className="node-port node-port--out" data-node={node.id} data-side="out" />
+        )}
 
         <div className="node-head">
           <NodeIcon node={node} />

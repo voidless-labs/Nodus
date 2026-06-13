@@ -1,6 +1,6 @@
 import { Canvas } from './ui/Canvas';
-import { NodeCard } from './ui/nodes/NodeCard';
-import type { NodeModel } from './ui/nodes/types';
+import { Graph } from './ui/Graph';
+import type { EdgeModel, NodeModel } from './ui/nodes/types';
 
 /**
  * NodusApp — root of the redesigned Nodus UI.
@@ -93,13 +93,19 @@ const SAMPLE_NODES: NodeModel[] = [
   },
 ];
 
+const SAMPLE_EDGES: EdgeModel[] = [
+  { id: 'e1', from: 'spotify', to: 'headphones', active: true },
+  { id: 'e2', from: 'spotify', to: 'nodusmic', active: true },
+  { id: 'e3', from: 'mic', to: 'nodusmic', active: true },
+  { id: 'e4', from: 'mic', to: 'obs', muted: true },
+  { id: 'e5', from: 'game', to: 'obs' },
+];
+
 export default function NodusApp() {
   return (
     <div className="app-shell">
       <Canvas>
-        {SAMPLE_NODES.map((n) => (
-          <NodeCard key={n.id} node={n} />
-        ))}
+        <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
       </Canvas>
     </div>
   );

@@ -1,0 +1,36 @@
+/* Graph.css — node layer + the SVG wire layer behind it. */
+
+.graph {
+  position: absolute;
+  inset: 0;
+}
+
+/* Wires sit behind the cards (DOM order + this layer fills the surface). */
+.edge-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--color-edge-idle);
+  stroke-width: 2px;
+  stroke-linecap: round;
+  transition: stroke var(--transition-fast);
+}
+
+/* Active = audio flowing: brighter line with a soft glow (static, no dash run). */
+.edge.is-active {
+  stroke: var(--color-edge-active);
+  filter: drop-shadow(0 0 3px rgba(107, 107, 120, 0.5));
+}
+
+/* Muted = dim red dashed. */
+.edge.is-muted {
+  stroke: var(--color-muted-edge);
+  stroke-dasharray: 6 5;
+}
