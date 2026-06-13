@@ -1,8 +1,10 @@
-/* NodeCard.css — node anatomy, states and the cursor-reactive border. */
+/* NodeCard.css — node anatomy, states and the cursor-reactive border.
+   Tuned to Node-design-v2: spacious card, bold name, labelled inset meter,
+   mute on the bottom row, larger slider thumb. */
 
 .node {
   position: absolute;
-  width: 244px;
+  width: 290px;
   font-family: var(--font-family);
   user-select: none;
   /* --type-color is set inline per node; --mx/--my by the move handler. */
@@ -14,8 +16,8 @@
 .node-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 7px 4px;
+  gap: 7px;
+  margin: 0 0 9px 6px;
   font-size: var(--font-size-label);
   color: var(--color-text-secondary);
   letter-spacing: 0.3px;
@@ -27,14 +29,14 @@
   background: var(--type-color);
 }
 
-/* ── Card ─────────────────────────────────────────────────────── */
+/* ── Card (the frosted outer frame) ───────────────────────────── */
 .node-card {
   position: relative;
-  border-radius: var(--radius-node);
-  background: linear-gradient(180deg, rgba(28, 28, 33, 0.92), rgba(20, 20, 24, 0.92));
-  border: 1px solid var(--color-node-border);
-  box-shadow: var(--shadow-node);
-  padding: 13px 14px 14px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(30, 30, 36, 0.95), rgba(19, 19, 23, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: var(--shadow-node), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  padding: 18px;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
     opacity var(--transition-fast);
 }
@@ -47,11 +49,10 @@
   border-radius: inherit;
   padding: 1px;
   background: radial-gradient(
-    180px circle at var(--mx) var(--my),
+    200px circle at var(--mx) var(--my),
     color-mix(in srgb, var(--type-color) 55%, transparent),
     transparent 60%
   );
-  /* show only the 1px ring, not the fill */
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -64,25 +65,25 @@
   opacity: 0.9;
 }
 
-/* ── Head: icon + titles + mute ───────────────────────────────── */
+/* ── Head: icon + titles ──────────────────────────────────────── */
 .node-head {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 13px;
 }
 .node-icon {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--type-color);
 }
 .node-icon-letter {
-  font-size: 15px;
+  font-size: 18px;
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
@@ -91,90 +92,101 @@
   min-width: 0;
 }
 .node-name {
-  font-size: var(--font-size-title);
-  font-weight: var(--font-weight-medium);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .node-sub {
-  font-size: var(--font-size-label);
+  font-size: 12px;
   color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 1px;
-}
-.node-mute {
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  border-radius: 7px;
-  cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-.node-mute:hover {
-  color: var(--color-text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  margin-top: 2px;
 }
 
-/* ── VU meter ─────────────────────────────────────────────────── */
+/* ── Meter block (labelled, recessed track) ───────────────────── */
+.node-meter-block {
+  margin: 16px 0 14px;
+}
+.node-meter-label {
+  font-size: var(--font-size-label);
+  color: var(--color-text-secondary);
+  margin: 0 0 7px 1px;
+}
 .node-meter {
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.06);
-  margin: 12px 0 11px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.32);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 .node-meter-fill {
   height: 100%;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--type-color);
+  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--type-color) 70%, transparent);
   transition: width 90ms linear;
 }
 
-/* ── Volume slider ────────────────────────────────────────────── */
+/* ── Bottom row: mute + slider + percent ──────────────────────── */
 .node-vol {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.node-mute {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-text-secondary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.node-mute:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.07);
 }
 .node-slider {
   flex: 1 1 auto;
   -webkit-appearance: none;
   appearance: none;
-  height: 3px;
+  height: 4px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.14);
   cursor: pointer;
 }
 .node-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 13px;
-  height: 13px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   background: var(--color-text-primary);
   border: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
 }
 .node-slider::-moz-range-thumb {
-  width: 13px;
-  height: 13px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   background: var(--color-text-primary);
   border: none;
 }
 .node-vol-pct {
   flex: 0 0 auto;
-  font-size: var(--font-size-label);
+  font-size: 12px;
   color: var(--color-text-secondary);
-  width: 30px;
+  width: 34px;
   text-align: right;
 }
 
@@ -182,30 +194,32 @@
 .node-port {
   position: absolute;
   top: 50%;
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: var(--type-color);
   border: 2px solid var(--color-canvas);
   transform: translateY(-50%);
+  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--type-color) 60%, transparent);
 }
 .node-port--in {
-  left: -5px;
+  left: -6px;
 }
 .node-port--out {
-  right: -5px;
+  right: -6px;
 }
 
 /* ── States ───────────────────────────────────────────────────── */
 .node.is-active .node-card {
-  border-color: color-mix(in srgb, var(--type-color) 45%, var(--color-node-border));
-  box-shadow: var(--shadow-node), 0 0 18px -2px color-mix(in srgb, var(--type-color) 35%, transparent);
+  border-color: color-mix(in srgb, var(--type-color) 40%, rgba(255, 255, 255, 0.07));
+  box-shadow: var(--shadow-node), 0 0 22px -4px color-mix(in srgb, var(--type-color) 35%, transparent);
 }
 .node.is-muted .node-card {
   opacity: 0.6;
 }
 .node.is-muted .node-meter-fill {
   background: var(--color-text-muted);
+  box-shadow: none;
 }
 .node.is-idle .node-card {
   opacity: 0.45;
@@ -213,4 +227,5 @@
 .node.is-idle .node-label-dot,
 .node.is-idle .node-port {
   background: var(--color-text-muted);
+  box-shadow: none;
 }
