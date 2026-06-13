@@ -24,12 +24,19 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* The whole app fills the window; the canvas sits underneath the chrome. */
+/* The shell is a column: the topbar, then the canvas area fills the rest. */
 .app-shell {
   position: relative;
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   isolation: isolate;
+}
+.canvas-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* Temporary scaffold marker (removed in R10 when the topbar lands). */

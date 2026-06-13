@@ -1,0 +1,170 @@
+/* Topbar.css — the single persistent chrome bar. */
+
+.topbar {
+  flex: 0 0 auto;
+  height: 48px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 14px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-node-border);
+  z-index: 10;
+}
+
+/* ── Left: brand ──────────────────────────────────────────────── */
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  justify-self: start;
+}
+.brand-mark {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 7px);
+  grid-auto-rows: 7px;
+  gap: 3px;
+  transform: rotate(0deg);
+}
+.brand-mark i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  display: block;
+}
+.brand-mark i:nth-child(3) {
+  grid-column: span 2;
+  width: 17px;
+}
+.brand-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--color-text-primary);
+}
+
+/* ── Center: scene tabs ───────────────────────────────────────── */
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: center;
+}
+.scene-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 12px;
+  border-radius: var(--radius-btn);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.scene-tab:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.03);
+}
+.scene-tab.is-active {
+  background: var(--color-node-bg);
+  border-color: var(--color-node-border);
+  color: var(--color-text-primary);
+}
+.scene-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.scene-close {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+.scene-close:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+.scene-add {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--color-node-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.scene-add:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-secondary);
+}
+
+/* ── Right: menu + engine pill ────────────────────────────────── */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
+}
+.topbar-menu {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.topbar-menu:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Engine pill: paused = filled amber "start"; live = subtle "● live". */
+.engine-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 16px;
+  border-radius: var(--radius-btn);
+  border: 1px solid transparent;
+  background: var(--color-accent);
+  color: #1a1505;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.engine-pill:hover {
+  background: var(--color-accent-hover);
+}
+.engine-pill.is-live {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-node-border));
+  color: var(--color-accent);
+}
+.engine-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: var(--glow-accent);
+}

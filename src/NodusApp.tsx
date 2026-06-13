@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { Canvas } from './ui/Canvas';
 import { Graph } from './ui/Graph';
+import { Topbar } from './ui/Topbar';
+import { EngineButton } from './ui/EngineButton';
 import type { EdgeModel, NodeModel } from './ui/nodes/types';
 
 /**
@@ -102,11 +105,18 @@ const SAMPLE_EDGES: EdgeModel[] = [
 ];
 
 export default function NodusApp() {
+  const [live, setLive] = useState(false);
+  const toggleLive = () => setLive((v) => !v);
+
   return (
     <div className="app-shell">
-      <Canvas>
-        <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
-      </Canvas>
+      <Topbar live={live} onToggleLive={toggleLive} />
+      <div className="canvas-area">
+        <Canvas>
+          <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
+        </Canvas>
+        <EngineButton live={live} onToggleLive={toggleLive} />
+      </div>
     </div>
   );
 }
