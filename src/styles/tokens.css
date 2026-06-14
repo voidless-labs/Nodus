@@ -15,6 +15,9 @@
   --color-border:   rgba(255, 255, 255, 0.065);
   --color-border-2: rgba(255, 255, 255, 0.10);
 
+  /* accent UI panels (BottomBar, AddPanel) — subtle purple-tinted gradient */
+  --gradient-accent-panel: linear-gradient(180deg, #1F1B27 0%, #131317 100%);
+
   /* node internals (exact values from the owner reference) */
   --color-node-inset:        #121215;  /* recessed panel bg (input level) — rgba 18,18,21 */
   --color-node-inset-border: #252527;  /* recessed panel border — rgba 37,37,39 */
