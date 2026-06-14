@@ -1,0 +1,168 @@
+/* AddPanel.css — "+ add" launcher + popover, bottom-left. */
+
+.ap-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+}
+
+.addpanel {
+  position: absolute;
+  left: 16px;
+  bottom: 56px; /* sits above the mini-status readout */
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+/* ── Collapsed toggle ─────────────────────────────────────────── */
+.ap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--color-border-2);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.7);
+  transition: color var(--transition-fast), border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.ap-toggle:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-muted);
+}
+.addpanel.is-open .ap-toggle {
+  color: var(--color-text-primary);
+  background: var(--color-panel-2);
+}
+.ap-toggle-plus {
+  font-size: 15px;
+  line-height: 1;
+  color: var(--color-accent);
+}
+
+/* ── Popover (grows upward from the toggle) ───────────────────── */
+.ap-pop {
+  width: 256px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px -18px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+}
+.ap-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+}
+.ap-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: 12px;
+}
+.ap-search input::placeholder {
+  color: var(--color-text-dim);
+}
+
+.ap-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.ap-section + .ap-section {
+  margin-top: 4px;
+}
+.ap-section-h {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: 8px 8px 5px;
+}
+.ap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+.ap-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.ap-row-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--color-icon-bg);
+  border: 1px solid var(--color-icon-border);
+  color: var(--color-text-dim);
+}
+.ap-row-letter {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-icon-letter);
+}
+.ap-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ap-row-name {
+  font-size: 12.5px;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ap-row-sub {
+  font-size: 10.5px;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ap-row-add {
+  flex: 0 0 auto;
+  font-size: 15px;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.ap-row:hover .ap-row-add {
+  opacity: 1;
+  color: var(--color-accent);
+}
+.ap-empty {
+  padding: 14px 10px;
+  font-size: 11.5px;
+  color: var(--color-text-dim);
+  text-align: center;
+}

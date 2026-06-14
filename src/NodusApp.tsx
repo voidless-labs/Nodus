@@ -6,6 +6,7 @@ import { EngineButton } from './ui/EngineButton';
 import { BottomBar } from './ui/BottomBar';
 import { ZoomControls } from './ui/ZoomControls';
 import { MiniStatus } from './ui/MiniStatus';
+import { AddPanel } from './ui/AddPanel';
 import type { EdgeModel, NodeModel } from './ui/nodes/types';
 
 /**
@@ -122,6 +123,7 @@ export default function NodusApp() {
         <MiniStatus nodes={SAMPLE_NODES.length} routes={SAMPLE_EDGES.length} live={live} />
         <ZoomControls />
         <BottomBar />
+        <AddPanel />
       </div>
     </div>
   );
