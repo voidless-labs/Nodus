@@ -63,14 +63,14 @@ export interface NodeModel {
   compact?: boolean;
 }
 
-/** A hub ("Stream Mix") node — many labeled inputs → one mixed output. */
+/** A hub ("Stream Mix") node — per-input volumes → one mixed output. */
 export interface HubModel {
   id: string;
   name: string;
   subtitle: string;
-  inputs: { id: string; label: string }[];
-  /** Setting rows shown as dropdown-style chips. */
-  settings: { label: string; value: string }[];
+  /** Each connected input with its own level in the mix (0..1). */
+  inputs: { id: string; label: string; volume: number }[];
+  /** Output mix level 0..1 (for the bottom meter). */
   level: number;
   active?: boolean;
   selected?: boolean;

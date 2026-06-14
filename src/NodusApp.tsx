@@ -107,14 +107,9 @@ const SAMPLE_HUBS: HubModel[] = [
     name: 'Stream Mix',
     subtitle: 'routing engine',
     inputs: [
-      { id: 'mic', label: 'mic' },
-      { id: 'music', label: 'music' },
-      { id: 'game', label: 'game' },
-    ],
-    settings: [
-      { label: 'sample rate', value: '48 kHz' },
-      { label: 'limiter', value: '−1 dB' },
-      { label: 'mode', value: 'stereo' },
+      { id: 'mic', label: 'mic', volume: 0.92 },
+      { id: 'music', label: 'music', volume: 0.55 },
+      { id: 'game', label: 'game', volume: 0.8 },
     ],
     level: 0.7,
     active: true,
