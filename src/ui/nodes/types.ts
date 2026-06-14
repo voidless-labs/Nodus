@@ -57,6 +57,25 @@ export interface NodeModel {
   /** Has an input port (left) / output port (right). */
   hasInput?: boolean;
   hasOutput?: boolean;
+  /** Selected → accent outline. */
+  selected?: boolean;
+  /** Compact → icon + name + meter only (no slider). */
+  compact?: boolean;
+}
+
+/** A hub ("Stream Mix") node — many labeled inputs → one mixed output. */
+export interface HubModel {
+  id: string;
+  name: string;
+  subtitle: string;
+  inputs: { id: string; label: string }[];
+  /** Setting rows shown as dropdown-style chips. */
+  settings: { label: string; value: string }[];
+  level: number;
+  active?: boolean;
+  selected?: boolean;
+  x: number;
+  y: number;
 }
 
 /** One wire from a source node's output port to a target node's input port. */
@@ -64,6 +83,8 @@ export interface EdgeModel {
   id: string;
   from: string; // source node id (output port)
   to: string; // target node id (input port)
+  /** Target a specific labeled input (hub nodes); default = the node's single input. */
+  toPort?: string;
   active?: boolean; // audio flowing → brighter + faint glow
   muted?: boolean; // dashed, dim red
 }

@@ -1,0 +1,116 @@
+/* HubNode.css — the "Stream Mix" routing hub. Reuses .node / .node-card. */
+
+.node--hub {
+  width: 230px;
+}
+.hub-card {
+  /* slightly richer than a leaf node to read as the routing centre */
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+/* ── IO block: labeled inputs (left) + mix output (right) ─────── */
+.hub-io {
+  margin: 15px 0 14px;
+  position: relative;
+}
+.hub-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.hub-in-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.hub-in-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-type-source);
+}
+/* the real connection port sits on the card's left edge, at this row */
+.hub-port {
+  position: absolute;
+  left: -20px; /* card padding (18) + 2 → on the border */
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.hub-out-row {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.hub-out-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 7px -1px var(--color-accent);
+}
+.hub-port-out {
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* ── Settings rows (dropdown chips) ───────────────────────────── */
+.hub-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 13px;
+  border-top: 1px solid var(--color-border);
+}
+.hub-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.hub-set-label {
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
+.hub-set-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: var(--color-node-inset);
+  border: 1px solid var(--color-node-inset-border);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.hub-set-chip svg {
+  color: var(--color-text-dim);
+}
+
+/* ── Output meter strip ───────────────────────────────────────── */
+.hub-meter {
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.32);
+  margin-top: 14px;
+  overflow: hidden;
+}
+.hub-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-accent);
+  box-shadow: 0 0 7px -1px var(--color-accent);
+  transition: width 90ms linear;
+}

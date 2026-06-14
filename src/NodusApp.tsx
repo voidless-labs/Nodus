@@ -6,30 +6,16 @@ import { EngineButton } from './ui/EngineButton';
 import { BottomBar } from './ui/BottomBar';
 import { ZoomControls } from './ui/ZoomControls';
 import { AddPanel } from './ui/AddPanel';
-import type { EdgeModel, NodeModel } from './ui/nodes/types';
+import type { EdgeModel, HubModel, NodeModel } from './ui/nodes/types';
 
 /**
  * NodusApp — root of the redesigned Nodus UI.
  *
- * R4 milestone: sample nodes placed on the canvas so the node card design and
- * its states can be reviewed. The data here is static sample data; the engine
- * wiring (real devices, live meters) is R3, which comes next.
+ * Sample data lays out the hero scene (sources → Stream Mix hub → outputs) so
+ * the node types and states can be reviewed. Real devices, live meters and the
+ * engine are wired in R3.
  */
 const SAMPLE_NODES: NodeModel[] = [
-  {
-    id: 'spotify',
-    kind: 'source',
-    name: 'Spotify',
-    subtitle: 'playing · app',
-    avatar: 'S',
-    level: 0.62,
-    volume: 0.55,
-    active: true,
-    hasInput: false,
-    hasOutput: true,
-    x: 60,
-    y: 110,
-  },
   {
     id: 'mic',
     kind: 'source',
@@ -40,22 +26,37 @@ const SAMPLE_NODES: NodeModel[] = [
     active: true,
     hasInput: false,
     hasOutput: true,
-    x: 60,
-    y: 340,
+    x: 40,
+    y: 96,
+  },
+  {
+    id: 'spotify',
+    kind: 'source',
+    name: 'Spotify',
+    subtitle: 'playing · app',
+    avatar: 'S',
+    level: 0.62,
+    volume: 0.55,
+    active: true,
+    selected: true,
+    hasInput: false,
+    hasOutput: true,
+    x: 40,
+    y: 300,
   },
   {
     id: 'game',
     kind: 'source',
     name: 'Cyberpunk',
-    subtitle: 'not running',
+    subtitle: 'running · app',
     avatar: 'C',
-    level: 0,
+    level: 0.5,
     volume: 0.8,
-    running: false,
+    active: true,
     hasInput: false,
     hasOutput: true,
-    x: 60,
-    y: 570,
+    x: 40,
+    y: 504,
   },
   {
     id: 'headphones',
@@ -67,21 +68,22 @@ const SAMPLE_NODES: NodeModel[] = [
     active: true,
     hasInput: true,
     hasOutput: false,
-    x: 560,
-    y: 110,
+    x: 760,
+    y: 96,
   },
   {
     id: 'obs',
     kind: 'output',
     name: 'OBS',
-    subtitle: 'stream output · muted',
-    level: 0,
+    subtitle: 'stream output',
+    level: 0.4,
     volume: 0.7,
-    muted: true,
+    active: true,
     hasInput: true,
     hasOutput: false,
-    x: 560,
-    y: 340,
+    compact: true,
+    x: 760,
+    y: 300,
   },
   {
     id: 'nodusmic',
@@ -94,17 +96,40 @@ const SAMPLE_NODES: NodeModel[] = [
     active: true,
     hasInput: true,
     hasOutput: false,
-    x: 560,
-    y: 570,
+    x: 760,
+    y: 452,
+  },
+];
+
+const SAMPLE_HUBS: HubModel[] = [
+  {
+    id: 'mix',
+    name: 'Stream Mix',
+    subtitle: 'routing engine',
+    inputs: [
+      { id: 'mic', label: 'mic' },
+      { id: 'music', label: 'music' },
+      { id: 'game', label: 'game' },
+    ],
+    settings: [
+      { label: 'sample rate', value: '48 kHz' },
+      { label: 'limiter', value: '−1 dB' },
+      { label: 'mode', value: 'stereo' },
+    ],
+    level: 0.7,
+    active: true,
+    x: 400,
+    y: 250,
   },
 ];
 
 const SAMPLE_EDGES: EdgeModel[] = [
-  { id: 'e1', from: 'spotify', to: 'headphones', active: true },
-  { id: 'e2', from: 'spotify', to: 'nodusmic', active: true },
-  { id: 'e3', from: 'mic', to: 'nodusmic', active: true },
-  { id: 'e4', from: 'mic', to: 'obs', muted: true },
-  { id: 'e5', from: 'game', to: 'obs' },
+  { id: 'e1', from: 'mic', to: 'mix', toPort: 'mic', active: true },
+  { id: 'e2', from: 'spotify', to: 'mix', toPort: 'music', active: true },
+  { id: 'e3', from: 'game', to: 'mix', toPort: 'game', active: true },
+  { id: 'e4', from: 'mix', to: 'headphones', active: true },
+  { id: 'e5', from: 'mix', to: 'obs', active: true },
+  { id: 'e6', from: 'mix', to: 'nodusmic', active: true },
 ];
 
 export default function NodusApp() {
@@ -116,12 +141,12 @@ export default function NodusApp() {
       <Topbar />
       <div className="canvas-area">
         <Canvas>
-          <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
+          <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} hubs={SAMPLE_HUBS} />
         </Canvas>
         <EngineButton live={live} onToggleLive={toggleLive} />
         <ZoomControls />
         <BottomBar />
-        <AddPanel nodes={SAMPLE_NODES.length} routes={SAMPLE_EDGES.length} />
+        <AddPanel nodes={SAMPLE_NODES.length + SAMPLE_HUBS.length} routes={SAMPLE_EDGES.length} />
       </div>
     </div>
   );

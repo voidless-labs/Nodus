@@ -44,6 +44,8 @@ export function NodeCard({ node }: { node: NodeModel }) {
     node.active ? 'is-active' : '',
     node.muted ? 'is-muted' : '',
     node.running === false ? 'is-idle' : '',
+    node.selected ? 'is-selected' : '',
+    node.compact ? 'is-compact' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -64,10 +66,10 @@ export function NodeCard({ node }: { node: NodeModel }) {
         <div className="node-glow" aria-hidden />
 
         {node.hasInput !== false && (
-          <span className="node-port node-port--in" data-node={node.id} data-side="in" />
+          <span className="node-port node-port--in" data-node={node.id} data-side="in" data-port="" />
         )}
         {node.hasOutput !== false && (
-          <span className="node-port node-port--out" data-node={node.id} data-side="out" />
+          <span className="node-port node-port--out" data-node={node.id} data-side="out" data-port="" />
         )}
 
         <div className="node-head">

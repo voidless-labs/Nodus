@@ -235,3 +235,27 @@
   background: var(--color-text-muted);
   box-shadow: none;
 }
+
+/* Selected → accent outline. */
+.node.is-selected .node-card {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent);
+}
+
+/* Compact → icon + name + meter only, no slider, tighter. */
+.node.is-compact {
+  width: 220px;
+}
+.node.is-compact .node-card {
+  padding: 13px 14px;
+}
+.node.is-compact .node-meter-block {
+  margin: 13px 0 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+.node.is-compact .node-meter-label,
+.node.is-compact .node-vol {
+  display: none;
+}
