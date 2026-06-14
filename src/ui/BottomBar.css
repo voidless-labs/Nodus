@@ -1,27 +1,39 @@
-/* BottomBar.css — floating node library at bottom-center. */
+/* BottomBar.css — accent node library, bottom-center, with a slide-up panel. */
+
+.bb-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+}
 
 .bottombar {
   position: absolute;
   bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
-  width: 360px;
-  padding: 9px;
-  background: var(--color-surface);
+  z-index: 7;
+  width: 480px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── The bar itself (accent) ──────────────────────────────────── */
+.bb-bar {
+  padding: 11px;
+  background: var(--color-panel-2);
   border: 1px solid var(--color-border-2);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.8);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px -14px rgba(0, 0, 0, 0.85);
 }
 
 .bb-search {
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 36px;
-  padding: 0 11px;
-  border-radius: 8px;
-  background: var(--color-panel-2);
+  gap: 11px;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   color: var(--color-text-dim);
 }
@@ -32,7 +44,7 @@
   outline: none;
   color: var(--color-text-primary);
   font-family: var(--font-family);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 .bb-search input::placeholder {
   color: var(--color-text-dim);
@@ -41,29 +53,103 @@
 .bb-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 10px;
 }
 .bb-spacer {
   flex: 1 1 auto;
 }
 .bb-tab {
-  width: 34px;
-  height: 30px;
+  width: 40px;
+  height: 36px;
   display: grid;
   place-items: center;
   border: none;
   background: transparent;
   color: var(--color-text-dim);
-  border-radius: 7px;
+  border-radius: 9px;
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 .bb-tab:hover {
   color: var(--color-text-secondary);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.04);
 }
 .bb-tab.is-active {
   color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+/* the right-hand "misc" tab is a round, more prominent button */
+.bb-tab--round {
+  border-radius: 50%;
+  width: 36px;
+}
+.bb-tab--round.is-active {
+  color: #161318;
+  background: var(--color-text-primary);
+}
+
+/* ── Slide-up panel ───────────────────────────────────────────── */
+.bb-pop {
+  margin-bottom: 9px;
+  padding: 12px;
   background: var(--color-panel-2);
+  border: 1px solid var(--color-border-2);
+  border-radius: 14px;
+  box-shadow: 0 22px 54px -18px rgba(0, 0, 0, 0.9);
+  animation: bb-rise 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes bb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.bb-pop-h {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: 2px 4px 10px;
+}
+.bb-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.bb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.bb-card:hover {
+  border-color: var(--color-border-2);
+  background: #15151a;
+}
+.bb-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.bb-card-sub {
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+.bb-empty {
+  grid-column: 1 / -1;
+  padding: 14px;
+  font-size: 12px;
+  color: var(--color-text-dim);
+  text-align: center;
 }

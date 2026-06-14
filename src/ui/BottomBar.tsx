@@ -1,43 +1,115 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import './BottomBar.css';
 
 /**
- * BottomBar — the floating node library (R12).
+ * BottomBar — the floating node library (R12), an accent element.
  *
- * A search field over a row of category tabs (recent / all / fx / logic /
- * misc), matched to the Claude-design bottom bar. Visual only for now: picking
- * a node and dropping it on the canvas is wired with the engine in R3/R13.
+ * A search field over a row of category tabs. Clicking a category slides a
+ * panel UP from the bar listing that category's node types; clicking the active
+ * category (or outside) slides it back down. Visual only for now — dropping a
+ * node on the canvas is wired with the engine in R3.
  */
 type Tab = 'recent' | 'all' | 'fx' | 'logic' | 'misc';
 
+type NodeType = { id: string; name: string; sub: string };
+
+const CATALOG: Record<Tab, NodeType[]> = {
+  recent: [
+    { id: 'spotify', name: 'Spotify', sub: 'source' },
+    { id: 'headphones', name: 'Headphones', sub: 'output' },
+    { id: 'nodusmic', name: 'Nodus Mic', sub: 'virtual' },
+  ],
+  all: [
+    { id: 'source', name: 'Source', sub: 'app or microphone' },
+    { id: 'output', name: 'Output', sub: 'speakers / OBS' },
+    { id: 'hub', name: 'Stream Mix', sub: 'routing hub' },
+    { id: 'virtual', name: 'Virtual device', sub: 'Nodus speaker / mic' },
+    { id: 'fx', name: 'Effect', sub: 'on a route' },
+    { id: 'logic', name: 'Logic', sub: 'condition / trigger' },
+  ],
+  fx: [
+    { id: 'eq', name: 'EQ', sub: 'equalizer' },
+    { id: 'comp', name: 'Compressor', sub: 'dynamics' },
+    { id: 'gain', name: 'Gain', sub: 'level' },
+    { id: 'limiter', name: 'Limiter', sub: 'ceiling' },
+    { id: 'reverb', name: 'Reverb', sub: 'space' },
+    { id: 'gate', name: 'Noise Gate', sub: 'cleanup' },
+  ],
+  logic: [
+    { id: 'ptt', name: 'Push-to-Talk', sub: 'hold a key' },
+    { id: 'hotkey', name: 'Hotkey', sub: 'toggle on key' },
+    { id: 'toggle', name: 'Toggle', sub: 'on / off' },
+    { id: 'timer', name: 'Timer', sub: 'time window' },
+  ],
+  misc: [
+    { id: 'streammix', name: 'Stream Mix', sub: 'preset' },
+    { id: 'midi', name: 'MIDI', sub: 'control' },
+  ],
+};
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'recent', label: 'recent' },
+  { id: 'all', label: 'all' },
+  { id: 'fx', label: 'fx' },
+  { id: 'logic', label: 'logic' },
+  { id: 'misc', label: 'misc' },
+];
+
 export function BottomBar() {
-  const [tab, setTab] = useState<Tab>('all');
+  const [active, setActive] = useState<Tab | null>(null);
+  const [q, setQ] = useState('');
+
+  const items = useMemo(() => {
+    if (!active) return [];
+    const list = CATALOG[active];
+    const t = q.trim().toLowerCase();
+    return t ? list.filter((n) => n.name.toLowerCase().includes(t)) : list;
+  }, [active, q]);
+
+  const toggle = (t: Tab) => setActive((cur) => (cur === t ? null : t));
 
   return (
-    <div className="bottombar">
-      <label className="bb-search">
-        <SearchIcon />
-        <input placeholder="search nodes · type a name to highlight…" />
-      </label>
-      <div className="bb-tabs">
-        <BBTab active={tab === 'recent'} onClick={() => setTab('recent')} label="recent">
-          <ClockIcon />
-        </BBTab>
-        <BBTab active={tab === 'all'} onClick={() => setTab('all')} label="all">
-          <GridIcon />
-        </BBTab>
-        <BBTab active={tab === 'fx'} onClick={() => setTab('fx')} label="fx">
-          <SlidersIcon />
-        </BBTab>
-        <BBTab active={tab === 'logic'} onClick={() => setTab('logic')} label="logic">
-          <BoltIcon />
-        </BBTab>
-        <div className="bb-spacer" />
-        <BBTab active={tab === 'misc'} onClick={() => setTab('misc')} label="misc">
-          <SparkleIcon />
-        </BBTab>
+    <>
+      {active && <div className="bb-overlay" onClick={() => setActive(null)} />}
+      <div className={`bottombar ${active ? 'is-open' : ''}`}>
+        {active && (
+          <div className="bb-pop">
+            <div className="bb-pop-h">{active}</div>
+            <div className="bb-grid">
+              {items.map((n) => (
+                <button key={n.id} className="bb-card" onClick={() => setActive(null)}>
+                  <span className="bb-card-name">{n.name}</span>
+                  <span className="bb-card-sub">{n.sub}</span>
+                </button>
+              ))}
+              {items.length === 0 && <div className="bb-empty">nothing matches “{q}”</div>}
+            </div>
+          </div>
+        )}
+
+        <div className="bb-bar">
+          <label className="bb-search">
+            <SearchIcon />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="search nodes · type a name to highlight…"
+            />
+          </label>
+          <div className="bb-tabs">
+            {TABS.slice(0, 4).map((t) => (
+              <BBTab key={t.id} active={active === t.id} onClick={() => toggle(t.id)} label={t.label}>
+                <TabIcon id={t.id} />
+              </BBTab>
+            ))}
+            <div className="bb-spacer" />
+            <BBTab active={active === 'misc'} onClick={() => toggle('misc')} label="misc" round>
+              <TabIcon id="misc" />
+            </BBTab>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -45,23 +117,30 @@ function BBTab({
   active,
   onClick,
   label,
+  round,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  round?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <button className={`bb-tab ${active ? 'is-active' : ''}`} onClick={onClick} title={label} aria-label={label}>
+    <button
+      className={`bb-tab ${round ? 'bb-tab--round' : ''} ${active ? 'is-active' : ''}`}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
       {children}
     </button>
   );
 }
 
-const ic = {
-  width: 16,
-  height: 16,
+const IC = {
+  width: 17,
+  height: 17,
   viewBox: '0 0 24 24',
   fill: 'none',
   stroke: 'currentColor',
@@ -69,54 +148,49 @@ const ic = {
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 };
-
 function SearchIcon() {
   return (
-    <svg {...ic} width={15} height={15}>
+    <svg {...IC} width={15} height={15}>
       <circle cx="11" cy="11" r="7" />
       <path d="m21 21-4.3-4.3" />
     </svg>
   );
 }
-function ClockIcon() {
-  return (
-    <svg {...ic}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-function GridIcon() {
-  return (
-    <svg {...ic}>
-      <rect x="3" y="3" width="7" height="7" rx="1.5" />
-      <rect x="14" y="3" width="7" height="7" rx="1.5" />
-      <rect x="3" y="14" width="7" height="7" rx="1.5" />
-      <rect x="14" y="14" width="7" height="7" rx="1.5" />
-    </svg>
-  );
-}
-function SlidersIcon() {
-  return (
-    <svg {...ic}>
-      <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" />
-      <circle cx="15" cy="6" r="2" />
-      <circle cx="9" cy="12" r="2" />
-      <circle cx="17" cy="18" r="2" />
-    </svg>
-  );
-}
-function BoltIcon() {
-  return (
-    <svg {...ic}>
-      <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
-    </svg>
-  );
-}
-function SparkleIcon() {
-  return (
-    <svg {...ic}>
-      <path d="M12 3v18M3 12h18M6 6l12 12M18 6 6 18" />
-    </svg>
-  );
+function TabIcon({ id }: { id: Tab }) {
+  switch (id) {
+    case 'recent':
+      return (
+        <svg {...IC}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      );
+    case 'all':
+      return (
+        <svg {...IC}>
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+        </svg>
+      );
+    case 'fx':
+      return (
+        <svg {...IC}>
+          <path d="M4 21V14M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+        </svg>
+      );
+    case 'logic':
+      return (
+        <svg {...IC}>
+          <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
+        </svg>
+      );
+    case 'misc':
+      return (
+        <svg {...IC}>
+          <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
+        </svg>
+      );
+  }
 }

@@ -2,31 +2,34 @@ import { useMemo, useState } from 'react';
 import './AddPanel.css';
 
 /**
- * AddPanel — the "+ add" launcher at bottom-left (R13).
+ * AddPanel — the "+ add" launcher at bottom-left (R13), an accent element.
  *
- * Collapsed: a quiet "+ add" pill. Expanded: a panel growing upward with a
- * search field over two sections — "playing now" (auto-detected apps) and
- * "devices" (system audio devices). Picking a row drops a node on the canvas.
+ * Collapsed: a prominent "+ add" pill with the node/route counts to its right.
+ * Expanded: a wide panel growing upward with a search field (styled like the
+ * BottomBar search) over two sections — "playing now" (auto-detected apps) and
+ * "devices" — each row a colored round icon + name + type.
  *
- * Visual only for now: the lists are sample data and onPick just closes the
+ * Visual only for now: lists are sample data, picking a row just closes the
  * panel; real process/device data and node creation are wired in R3/R18.
  */
-type AddItem = { id: string; name: string; sub: string; kind: 'app' | 'device'; avatar?: string };
+type Glyph = 'music' | 'game' | 'mic' | 'headphones' | 'speaker';
+type TypeColor = 'source' | 'output' | 'virtual';
+type AddItem = { id: string; name: string; sub: string; glyph: Glyph; color: TypeColor };
 
 const SAMPLE_APPS: AddItem[] = [
-  { id: 'spotify', name: 'Spotify', sub: 'music app', kind: 'app', avatar: 'S' },
-  { id: 'discord', name: 'Discord', sub: 'voice app', kind: 'app', avatar: 'D' },
-  { id: 'chrome', name: 'Chrome', sub: 'browser', kind: 'app', avatar: 'C' },
+  { id: 'spotify', name: 'Spotify', sub: 'playing now', glyph: 'music', color: 'source' },
+  { id: 'cyberpunk', name: 'Cyberpunk', sub: 'playing now', glyph: 'game', color: 'source' },
+  { id: 'discord', name: 'Discord', sub: 'quiet', glyph: 'mic', color: 'source' },
+  { id: 'mic', name: 'Microphone', sub: 'Blue Yeti', glyph: 'mic', color: 'source' },
 ];
 
 const SAMPLE_DEVICES: AddItem[] = [
-  { id: 'headphones', name: 'Headphones', sub: 'Galaxy Buds', kind: 'device' },
-  { id: 'speakers', name: 'Speakers', sub: 'Realtek', kind: 'device' },
-  { id: 'mic', name: 'Microphone', sub: 'Shure MV7', kind: 'device' },
-  { id: 'nodusmic', name: 'Nodus Mic', sub: 'virtual · to Discord', kind: 'device' },
+  { id: 'headphones', name: 'Headphones', sub: 'Galaxy Buds', glyph: 'headphones', color: 'output' },
+  { id: 'speakers', name: 'Speakers', sub: 'Realtek', glyph: 'speaker', color: 'output' },
+  { id: 'nodusmic', name: 'Nodus Mic', sub: 'virtual · to Discord', glyph: 'mic', color: 'virtual' },
 ];
 
-export function AddPanel() {
+export function AddPanel({ nodes, routes }: { nodes: number; routes: number }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
 
@@ -37,7 +40,6 @@ export function AddPanel() {
   }, [q]);
 
   const pick = () => {
-    // R3/R18: create the node on the canvas. For now, just close.
     setOpen(false);
     setQ('');
   };
@@ -54,7 +56,7 @@ export function AddPanel() {
                 autoFocus
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="add to canvas · search apps & devices"
+                placeholder="find an app or device…"
               />
             </label>
 
@@ -82,10 +84,20 @@ export function AddPanel() {
           </div>
         )}
 
-        <button className="ap-toggle" onClick={() => setOpen((v) => !v)}>
-          <span className="ap-toggle-plus">+</span>
-          add
-        </button>
+        <div className="ap-bar">
+          <button className="ap-toggle" onClick={() => setOpen((v) => !v)}>
+            <span className="ap-toggle-plus">+</span>
+            add
+          </button>
+          <div className="ap-status" aria-hidden>
+            <span>
+              <b>nodes</b> {nodes}
+            </span>
+            <span>
+              <b>routes</b> {routes}
+            </span>
+          </div>
+        </div>
       </div>
     </>
   );
@@ -93,13 +105,13 @@ export function AddPanel() {
 
 function AddRow({ item, onClick }: { item: AddItem; onClick: () => void }) {
   return (
-    <button className="ap-row" onClick={onClick}>
+    <button
+      className="ap-row"
+      onClick={onClick}
+      style={{ ['--c' as string]: `var(--color-type-${item.color})` }}
+    >
       <span className="ap-row-icon">
-        {item.kind === 'app' ? (
-          <span className="ap-row-letter">{item.avatar ?? '?'}</span>
-        ) : (
-          <DeviceGlyph />
-        )}
+        <Glyph kind={item.glyph} />
       </span>
       <span className="ap-row-text">
         <span className="ap-row-name">{item.name}</span>
@@ -111,28 +123,62 @@ function AddRow({ item, onClick }: { item: AddItem; onClick: () => void }) {
 }
 
 const IC = {
-  width: 15,
-  height: 15,
-  viewBox: '0 0 24 24',
   fill: 'none',
   stroke: 'currentColor',
   strokeWidth: 2,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 };
+
 function SearchIcon() {
   return (
-    <svg {...IC}>
+    <svg width={15} height={15} viewBox="0 0 24 24" {...IC}>
       <circle cx="11" cy="11" r="7" />
       <path d="m21 21-4.3-4.3" />
     </svg>
   );
 }
-function DeviceGlyph() {
-  return (
-    <svg {...IC} width={14} height={14}>
-      <rect x="4" y="3" width="16" height="13" rx="2" />
-      <path d="M8 20h8M12 16v4" />
-    </svg>
-  );
+
+function Glyph({ kind }: { kind: Glyph }) {
+  const p = { width: 17, height: 17, viewBox: '0 0 24 24', ...IC };
+  switch (kind) {
+    case 'music':
+      return (
+        <svg {...p}>
+          <path d="M9 18V5l11-2v13" />
+          <circle cx="6" cy="18" r="3" />
+          <circle cx="17" cy="16" r="3" />
+        </svg>
+      );
+    case 'game':
+      return (
+        <svg {...p}>
+          <path d="M6 12h4M8 10v4M15 11h.01M18 13h.01" />
+          <rect x="2" y="6" width="20" height="12" rx="6" />
+        </svg>
+      );
+    case 'mic':
+      return (
+        <svg {...p}>
+          <rect x="9" y="2" width="6" height="11" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0M12 17v4" />
+        </svg>
+      );
+    case 'headphones':
+      return (
+        <svg {...p}>
+          <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
+          <rect x="2" y="14" width="5" height="7" rx="2" />
+          <rect x="17" y="14" width="5" height="7" rx="2" />
+        </svg>
+      );
+    case 'speaker':
+      return (
+        <svg {...p}>
+          <rect x="5" y="2" width="14" height="20" rx="3" />
+          <circle cx="12" cy="14" r="4" />
+          <circle cx="12" cy="6" r="1" />
+        </svg>
+      );
+  }
 }

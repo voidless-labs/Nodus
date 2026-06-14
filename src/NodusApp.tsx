@@ -5,7 +5,6 @@ import { Topbar } from './ui/Topbar';
 import { EngineButton } from './ui/EngineButton';
 import { BottomBar } from './ui/BottomBar';
 import { ZoomControls } from './ui/ZoomControls';
-import { MiniStatus } from './ui/MiniStatus';
 import { AddPanel } from './ui/AddPanel';
 import type { EdgeModel, NodeModel } from './ui/nodes/types';
 
@@ -120,10 +119,9 @@ export default function NodusApp() {
           <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
         </Canvas>
         <EngineButton live={live} onToggleLive={toggleLive} />
-        <MiniStatus nodes={SAMPLE_NODES.length} routes={SAMPLE_EDGES.length} live={live} />
         <ZoomControls />
         <BottomBar />
-        <AddPanel />
+        <AddPanel nodes={SAMPLE_NODES.length} routes={SAMPLE_EDGES.length} />
       </div>
     </div>
   );
