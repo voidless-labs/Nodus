@@ -1,0 +1,29 @@
+/* ZoomControls.css — quiet zoom column, bottom-right. */
+
+.zoom-controls {
+  position: absolute;
+  right: 16px;
+  bottom: 22px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zoom-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-dim);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.zoom-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-2);
+  background: var(--color-panel-2);
+}

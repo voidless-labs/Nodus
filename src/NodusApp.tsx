@@ -3,6 +3,9 @@ import { Canvas } from './ui/Canvas';
 import { Graph } from './ui/Graph';
 import { Topbar } from './ui/Topbar';
 import { EngineButton } from './ui/EngineButton';
+import { BottomBar } from './ui/BottomBar';
+import { ZoomControls } from './ui/ZoomControls';
+import { MiniStatus } from './ui/MiniStatus';
 import type { EdgeModel, NodeModel } from './ui/nodes/types';
 
 /**
@@ -116,6 +119,9 @@ export default function NodusApp() {
           <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
         </Canvas>
         <EngineButton live={live} onToggleLive={toggleLive} />
+        <MiniStatus nodes={SAMPLE_NODES.length} routes={SAMPLE_EDGES.length} live={live} />
+        <ZoomControls />
+        <BottomBar />
       </div>
     </div>
   );
