@@ -3,11 +3,11 @@
    See .nodus/docs/ReDesign/redesign-instructions.md. */
 
 :root {
-  /* ── Backgrounds (exact values from the Claude-design prototype) ─ */
-  --color-app-bg:      #09090A;   /* app/topbar base (--bg) */
-  --color-canvas:      #0A0A0B;   /* the canvas itself (--canvas-bg) */
-  --color-surface:     #0D0D0F;   /* topbar / panels (--panel) */
-  --color-panel-2:     #111114;   /* recessed chrome surface (--panel-2) */
+  /* ── Backgrounds (owner-tuned: topbar blends into the canvas) ─── */
+  --color-app-bg:      #080809;   /* app base */
+  --color-canvas:      #080809;   /* the canvas itself (rgba 8,8,9) */
+  --color-surface:     #0A0A0B;   /* topbar / panels (rgba 10,10,11) — barely above canvas */
+  --color-panel-2:     #111114;   /* recessed chrome surface */
   --color-node-bg:     #161619;   /* node card — solid, no gradient (owner spec rgba 22,22,25) */
   --color-node-border: #26262B;   /* node border (1px, owner spec) */
 
@@ -38,6 +38,7 @@
   --color-accent:       #F5C542;
   --color-accent-hover: #F0B820;
   --color-accent-soft:  rgba(245, 197, 66, 0.14);
+  --color-engine-fill:  #E8A33D;   /* engine-live pill — solid fill (rgba 232,163,61) */
 
   /* ── Node-type colors (ports + glow only, never card fill) ───── */
   --color-type-source:  #4ADE80;  /* app / microphone source → green */

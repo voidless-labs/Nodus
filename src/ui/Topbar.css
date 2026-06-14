@@ -8,7 +8,7 @@
   align-items: center;
   padding: 0 12px 0 16px;
   background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  /* no border: the topbar should read as part of the canvas (owner spec) */
   z-index: 40;
 }
 

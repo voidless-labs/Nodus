@@ -2,8 +2,8 @@ import './EngineButton.css';
 
 /**
  * EngineButton — the floating engine pill at top-center of the canvas (R11).
- * Mirrors the topbar engine pill; both read/write the same `live` state so
- * they stay in sync. Paused: dim "engine paused". Live: amber "● engine live".
+ * The only engine control. Paused: dim outline "+ engine paused". Live: a
+ * solid amber pill "+ engine live" (owner spec, fill rgba 232,163,61).
  */
 export function EngineButton({ live, onToggleLive }: { live: boolean; onToggleLive: () => void }) {
   return (
@@ -12,7 +12,7 @@ export function EngineButton({ live, onToggleLive }: { live: boolean; onToggleLi
       onClick={onToggleLive}
       title={live ? 'stop routing' : 'start routing'}
     >
-      {live ? <span className="engine-float-dot" /> : <span className="engine-float-plus">+</span>}
+      <span className="engine-float-plus">+</span>
       {live ? 'engine live' : 'engine paused'}
     </button>
   );
