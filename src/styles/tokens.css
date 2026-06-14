@@ -3,11 +3,17 @@
    See .nodus/docs/ReDesign/redesign-instructions.md. */
 
 :root {
-  /* ── Backgrounds ─────────────────────────────────────────────── */
-  --color-canvas:      #0E0E10;   /* the canvas itself */
-  --color-surface:     #141416;   /* mid surfaces (panels, popovers) */
-  --color-node-bg:     #161619;   /* node card — solid, no gradient (rgba 22,22,25) */
-  --color-node-border: #26262B;   /* node border (1px) */
+  /* ── Backgrounds (exact values from the Claude-design prototype) ─ */
+  --color-app-bg:      #09090A;   /* app/topbar base (--bg) */
+  --color-canvas:      #0A0A0B;   /* the canvas itself (--canvas-bg) */
+  --color-surface:     #0D0D0F;   /* topbar / panels (--panel) */
+  --color-panel-2:     #111114;   /* recessed chrome surface (--panel-2) */
+  --color-node-bg:     #161619;   /* node card — solid, no gradient (owner spec rgba 22,22,25) */
+  --color-node-border: #26262B;   /* node border (1px, owner spec) */
+
+  /* chrome borders (prototype) */
+  --color-border:   rgba(255, 255, 255, 0.065);
+  --color-border-2: rgba(255, 255, 255, 0.10);
 
   /* node internals (exact values from the owner reference) */
   --color-node-inset:        #121215;  /* recessed panel bg (input level) — rgba 18,18,21 */
@@ -16,16 +22,17 @@
   --color-icon-border:       #2D2D31;  /* app-icon square border — rgba 45,45,49 */
   --color-icon-letter:       #8C8C95;  /* app-icon letter — rgba 140,140,149 */
 
-  /* canvas texture */
-  --color-dot:         rgba(255, 255, 255, 0.045);  /* dot-grid dot */
+  /* canvas texture (prototype --grid is very faint) */
+  --color-dot:         rgba(255, 255, 255, 0.03);  /* dot-grid dot */
   --dot-grid-step:     24px;
   --vignette:          radial-gradient(ellipse 120% 120% at 50% 45%,
-                          transparent 52%, rgba(0, 0, 0, 0.55) 100%);
+                          transparent 55%, rgba(0, 0, 0, 0.45) 100%);
 
-  /* ── Text ────────────────────────────────────────────────────── */
-  --color-text-primary:   #E8E8EC;
-  --color-text-secondary: #6B6B78;
-  --color-text-muted:     #3D3D45;
+  /* ── Text (prototype) ────────────────────────────────────────── */
+  --color-text-primary:   #EAEAEC;
+  --color-text-secondary: #9A9AA2;
+  --color-text-dim:       #67676E;
+  --color-text-muted:     #45454B;
 
   /* ── Accent (engine button, selection) — amber ───────────────── */
   --color-accent:       #F5C542;

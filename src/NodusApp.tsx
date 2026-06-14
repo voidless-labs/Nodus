@@ -110,7 +110,7 @@ export default function NodusApp() {
 
   return (
     <div className="app-shell">
-      <Topbar live={live} onToggleLive={toggleLive} />
+      <Topbar />
       <div className="canvas-area">
         <Canvas>
           <Graph nodes={SAMPLE_NODES} edges={SAMPLE_EDGES} />
