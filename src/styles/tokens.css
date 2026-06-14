@@ -49,7 +49,7 @@
   --color-type-virtual: #A78BFA;  /* Nodus virtual device → purple */
   --color-type-fx:      #FB923C;  /* effects → orange */
   --color-type-logic:   #FACC15;  /* logic (PTT, hotkey) → yellow */
-  --color-type-hub:     #8B94A7;  /* routing hub → neutral steel */
+  --color-type-hub:     #5B8FCB;  /* routing hub → soft blue (Node-design.png frame) */
 
   /* ── States ──────────────────────────────────────────────────── */
   --color-muted-edge: #7F2E2E;    /* muted edge — dim red dashed */

@@ -2,12 +2,13 @@ import './HubNode.css';
 import type { HubModel } from './types';
 
 /**
- * HubNode — the "Stream Mix" routing hub (R5), matched to Node-design.png.
+ * HubNode — the "Stream Mix" routing hub (R5), matched 1:1 to Node-design.png.
  *
- * Many labeled inputs (mic / music / game) flow into one mixed output. Setting
- * rows (sample rate, limiter, mode) render as dropdown-style chips. Each input
- * is a real port (data-node/data-side="in"/data-port=<id>) so edges land on the
- * right row; the output is data-side="out". Steel-neutral type color.
+ * Two layers: an outer blue frosted frame and an inner dark card holding the
+ * header, the labeled inputs (mic/music/game) and the "mix" output. The setting
+ * rows (sample rate / limiter / mode) and the output meter sit on the frame
+ * BELOW the inner card. Connection ports are small nubs on the frame edges,
+ * aligned to the input rows and the mix row (data-node/data-side/data-port).
  */
 export function HubNode({ hub }: { hub: HubModel }) {
   const classes = [
@@ -20,34 +21,31 @@ export function HubNode({ hub }: { hub: HubModel }) {
     .join(' ');
 
   return (
-    <div
-      className={classes}
-      style={{ left: hub.x, top: hub.y, ['--type-color' as string]: 'var(--color-type-hub)' }}
-    >
+    <div className={classes} style={{ left: hub.x, top: hub.y }}>
       <div className="node-label">
         <span className="node-label-dot" />
         mixer
       </div>
 
-      <div className="node-card hub-card">
-        <div className="node-glow" aria-hidden />
+      <div className="hub-frame">
+        <div className="hub-glow" aria-hidden />
 
-        <div className="node-head">
-          <div className="node-icon">
-            <HubGlyph />
+        <div className="hub-inner">
+          <div className="node-head">
+            <div className="node-icon hub-icon">
+              <HubGlyph />
+            </div>
+            <div className="node-titles">
+              <div className="node-name">{hub.name}</div>
+              <div className="node-sub">{hub.subtitle}</div>
+            </div>
           </div>
-          <div className="node-titles">
-            <div className="node-name">{hub.name}</div>
-            <div className="node-sub">{hub.subtitle}</div>
-          </div>
-        </div>
 
-        <div className="hub-io">
           <div className="hub-inputs">
             {hub.inputs.map((inp) => (
               <div className="hub-in-row" key={inp.id}>
                 <span
-                  className="node-port node-port--in hub-port"
+                  className="node-port hub-port-in"
                   data-node={hub.id}
                   data-side="in"
                   data-port={inp.id}
@@ -56,16 +54,17 @@ export function HubNode({ hub }: { hub: HubModel }) {
                 {inp.label}
               </div>
             ))}
-          </div>
-          <div className="hub-out-row">
-            mix
-            <span className="hub-out-dot" />
-            <span
-              className="node-port node-port--out hub-port-out"
-              data-node={hub.id}
-              data-side="out"
-              data-port=""
-            />
+
+            <div className="hub-mix-row">
+              mix
+              <span className="hub-mix-dot" />
+              <span
+                className="node-port hub-port-out"
+                data-node={hub.id}
+                data-side="out"
+                data-port=""
+              />
+            </div>
           </div>
         </div>
 
@@ -92,10 +91,7 @@ export function HubNode({ hub }: { hub: HubModel }) {
 function HubGlyph() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6h6M14 6h6M4 12h10M18 12h2M4 18h4M12 18h8" />
-      <circle cx="12" cy="6" r="2" />
-      <circle cx="16" cy="12" r="2" />
-      <circle cx="10" cy="18" r="2" />
+      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
     </svg>
   );
 }
