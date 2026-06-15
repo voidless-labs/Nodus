@@ -7,6 +7,7 @@ import { BottomBar } from './ui/BottomBar';
 import { ZoomControls } from './ui/ZoomControls';
 import { AddPanel } from './ui/AddPanel';
 import { EmptyCanvas } from './ui/EmptyCanvas';
+import { VirtualDeviceModal } from './ui/VirtualDeviceModal';
 import { buildPreset, EMPTY_SCENE, type PresetId, type Scene } from './scenes';
 
 /**
@@ -19,6 +20,7 @@ import { buildPreset, EMPTY_SCENE, type PresetId, type Scene } from './scenes';
 export default function NodusApp() {
   const [live, setLive] = useState(false);
   const [scene, setScene] = useState<Scene>(EMPTY_SCENE);
+  const [setupOpen, setSetupOpen] = useState(true);
 
   const toggleLive = () => setLive((v) => !v);
   const loadPreset = (id: PresetId) => setScene(buildPreset(id));
@@ -41,6 +43,7 @@ export default function NodusApp() {
         <ZoomControls />
         <BottomBar />
         <AddPanel nodes={nodeCount} routes={scene.edges.length} />
+        {setupOpen && <VirtualDeviceModal onClose={() => setSetupOpen(false)} />}
       </div>
     </div>
   );

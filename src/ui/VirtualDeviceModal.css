@@ -1,0 +1,128 @@
+/* VirtualDeviceModal.css — soft first-run setup dialog. */
+
+.vdm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 4, 6, 0.7);
+}
+
+.vdm {
+  width: 380px;
+  padding: 26px 26px 18px;
+  border-radius: 18px;
+  background: var(--gradient-accent-panel);
+  border: 1px solid var(--color-border-2);
+  box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.9);
+  text-align: center;
+}
+
+.vdm-icon {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--color-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  color: var(--color-accent);
+}
+.vdm-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 9px;
+}
+.vdm-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  margin-bottom: 20px;
+}
+
+/* ── Choices ──────────────────────────────────────────────────── */
+.vdm-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.vdm-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--color-border-2);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.vdm-choice:hover {
+  border-color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.vdm-choice.is-primary {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  background: var(--color-accent-soft);
+}
+.vdm-choice.is-primary:hover {
+  border-color: var(--color-accent);
+}
+.vdm-choice-title {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.vdm-choice.is-primary .vdm-choice-title {
+  color: var(--color-accent);
+}
+.vdm-choice-sub {
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+
+/* ── Details spoiler ──────────────────────────────────────────── */
+.vdm-details-toggle {
+  border: none;
+  background: none;
+  color: var(--color-text-dim);
+  font-family: var(--font-family);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 4px;
+}
+.vdm-details-toggle:hover {
+  color: var(--color-text-secondary);
+}
+.vdm-details {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-text-dim);
+  text-align: left;
+  margin: 4px 2px 8px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--color-border);
+}
+
+/* ── Skip ─────────────────────────────────────────────────────── */
+.vdm-skip {
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-family);
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 8px;
+  padding: 6px;
+}
+.vdm-skip:hover {
+  color: var(--color-text-secondary);
+}
