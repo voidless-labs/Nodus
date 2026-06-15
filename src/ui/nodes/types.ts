@@ -42,6 +42,9 @@ export interface NodeModel {
   subtitle: string;
   /** Single-letter avatar fallback until real app icons land (R7). */
   avatar?: string;
+  /** Backend keys for live-level matching (volume-levels event). */
+  deviceId?: string;
+  exeName?: string;
   /** VU level 0..1 (live ~15fps once wired). */
   level: number;
   /** Route/source volume 0..1. */

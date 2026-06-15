@@ -38,7 +38,13 @@ export default function NodusApp() {
           {isEmpty ? (
             <EmptyCanvas onPreset={loadPreset} />
           ) : (
-            <Graph nodes={scene.nodes} edges={scene.edges} hubs={scene.hubs} search={search} />
+            <Graph
+              nodes={scene.nodes}
+              edges={scene.edges}
+              hubs={scene.hubs}
+              search={search}
+              levels={backend.levels}
+            />
           )}
         </Canvas>
         <EngineButton live={backend.live} onToggleLive={toggleLive} />

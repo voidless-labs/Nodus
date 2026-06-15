@@ -36,11 +36,14 @@ export function Graph({
   edges,
   hubs = [],
   search = '',
+  levels = {},
 }: {
   nodes: NodeModel[];
   edges: EdgeModel[];
   hubs?: HubModel[];
   search?: string;
+  /** Live per-source levels from the engine (keyed by device id / exe name). */
+  levels?: Record<string, number>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [ports, setPorts] = useState<PortMap>({});
@@ -86,9 +89,12 @@ export function Graph({
       {hubs.map((h) => (
         <HubNode key={h.id} hub={h} search={searchFor(h.name, search)} />
       ))}
-      {nodes.map((n) => (
-        <NodeCard key={n.id} node={n} search={searchFor(n.name, search)} />
-      ))}
+      {nodes.map((n) => {
+        // Live meter: the engine reports levels by device id or exe name.
+        const live = (n.deviceId && levels[n.deviceId]) ?? (n.exeName && levels[n.exeName]);
+        const node = typeof live === 'number' ? { ...n, level: live } : n;
+        return <NodeCard key={n.id} node={node} search={searchFor(n.name, search)} />;
+      })}
     </div>
   );
 }
