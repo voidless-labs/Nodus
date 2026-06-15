@@ -31,9 +31,11 @@
       `ui/Canvas.tsx`+css: графит #0E0E10 + точечная сетка 24px + виньетка. Проверено в превью.
 
 ### Логика и каркас
-- [ ] **R3. Порт логики и моста в TS** — `tauri-bridge.js` → типизированный `bridge.ts`
-      (типы invoke-команд и payload'ов событий); портировать состояние сцен/графа,
-      слушатели (devices/processes/volume-levels), engine start/stop.
+- [~] **R3. Порт логики и моста в TS** — фундамент ✅ 14.06: `bridge.ts` (типизированы все
+      invoke-команды и события по Rust-контракту: AudioDevice/Process/RoutingGraph/levels),
+      `useBackend.ts` (грузит реальные устройства/процессы + live levels + start/stop движка,
+      browser-fallback на sample). AddPanel и кнопка движка переведены на реальные данные.
+      Осталось (→ R18): live-метры в ноды, сборка/применение RoutingGraph из холста, save/load.
 - [x] **R4. BaseNode** ✅ 14.06 — `ui/nodes/NodeCard.tsx`+css, `NodeIcon.tsx`, `types.ts`:
       ярлык-тип над карточкой, карточка, иконка-глиф, имя, вторичная строка, VU-метр,
       слайдер+mute, порты. Состояния active(свечение)/muted/idle. Проверено через inspect

@@ -1,43 +1,75 @@
 import { useMemo, useState } from 'react';
 import './AddPanel.css';
+import type { AudioDevice, AudioProcess, SourceType } from '../bridge';
 
 /**
  * AddPanel — the "+ add" launcher at bottom-left (R13), an accent element.
  *
  * Collapsed: a prominent "+ add" pill with the node/route counts to its right.
- * Expanded: a wide panel growing upward with a search field (styled like the
- * BottomBar search) over two sections — "playing now" (auto-detected apps) and
- * "devices" — each row a colored round icon + name + type.
- *
- * Visual only for now: lists are sample data, picking a row just closes the
- * panel; real process/device data and node creation are wired in R3/R18.
+ * Expanded: a panel growing upward with a search field over two sections —
+ * "playing now" (real detected apps) and "devices" (real audio devices), each a
+ * colored round type icon + name + subtype. Data comes from useBackend (R3);
+ * picking a row will create the node on the canvas in R18.
  */
 type Glyph = 'music' | 'game' | 'mic' | 'headphones' | 'speaker';
 type TypeColor = 'source' | 'output' | 'virtual';
 type AddItem = { id: string; name: string; sub: string; glyph: Glyph; color: TypeColor };
 
-const SAMPLE_APPS: AddItem[] = [
-  { id: 'spotify', name: 'Spotify', sub: 'playing now', glyph: 'music', color: 'source' },
-  { id: 'cyberpunk', name: 'Cyberpunk', sub: 'playing now', glyph: 'game', color: 'source' },
-  { id: 'discord', name: 'Discord', sub: 'quiet', glyph: 'mic', color: 'source' },
-  { id: 'mic', name: 'Microphone', sub: 'Blue Yeti', glyph: 'mic', color: 'source' },
-];
+function processGlyph(t: SourceType): Glyph {
+  if (t === 'music') return 'music';
+  if (t === 'game') return 'game';
+  return 'mic';
+}
 
-const SAMPLE_DEVICES: AddItem[] = [
-  { id: 'headphones', name: 'Headphones', sub: 'Galaxy Buds', glyph: 'headphones', color: 'output' },
-  { id: 'speakers', name: 'Speakers', sub: 'Realtek', glyph: 'speaker', color: 'output' },
-  { id: 'nodusmic', name: 'Nodus Mic', sub: 'virtual · to Discord', glyph: 'mic', color: 'virtual' },
-];
+function processToItem(p: AudioProcess): AddItem {
+  return {
+    id: `proc:${p.exe_name}`,
+    name: p.display_name,
+    sub: p.source_type === 'unknown' ? 'app' : p.source_type,
+    glyph: processGlyph(p.source_type),
+    color: 'source',
+  };
+}
 
-export function AddPanel({ nodes, routes }: { nodes: number; routes: number }) {
+function deviceToItem(d: AudioDevice): AddItem {
+  const low = d.name.toLowerCase();
+  let glyph: Glyph;
+  let color: TypeColor;
+  if (d.device_type === 'input') {
+    glyph = 'mic';
+    color = 'source';
+  } else if (d.device_type === 'virtual') {
+    glyph = low.includes('mic') ? 'mic' : 'speaker';
+    color = 'virtual';
+  } else {
+    glyph = low.includes('headphone') || low.includes('buds') ? 'headphones' : 'speaker';
+    color = 'output';
+  }
+  // Strip the trailing "(System name)" for a cleaner primary label.
+  const name = d.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || d.name;
+  const sub = d.original_name ?? d.name.match(/\(([^)]*)\)\s*$/)?.[1] ?? d.device_type;
+  return { id: `dev:${d.id}`, name, sub, glyph, color };
+}
+
+export function AddPanel({
+  nodes,
+  routes,
+  devices: rawDevices,
+  processes,
+}: {
+  nodes: number;
+  routes: number;
+  devices: AudioDevice[];
+  processes: AudioProcess[];
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
 
   const [apps, devices] = useMemo(() => {
-    const f = (xs: AddItem[]) =>
-      q.trim() ? xs.filter((x) => x.name.toLowerCase().includes(q.trim().toLowerCase())) : xs;
-    return [f(SAMPLE_APPS), f(SAMPLE_DEVICES)];
-  }, [q]);
+    const t = q.trim().toLowerCase();
+    const f = (xs: AddItem[]) => (t ? xs.filter((x) => x.name.toLowerCase().includes(t)) : xs);
+    return [f(processes.map(processToItem)), f(rawDevices.map(deviceToItem))];
+  }, [q, processes, rawDevices]);
 
   const pick = () => {
     setOpen(false);
