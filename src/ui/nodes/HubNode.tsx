@@ -11,7 +11,7 @@ import type { HubModel } from './types';
  * ports ride the card's left edge at their rows; the output port is on the
  * right. Cursor-reactive border in the hub's blue type color.
  */
-export function HubNode({ hub }: { hub: HubModel }) {
+export function HubNode({ hub, search }: { hub: HubModel; search?: 'match' | 'dim' }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
@@ -28,7 +28,14 @@ export function HubNode({ hub }: { hub: HubModel }) {
     });
   };
 
-  const classes = ['node', 'node--hub', hub.active ? 'is-active' : '', hub.selected ? 'is-selected' : '']
+  const classes = [
+    'node',
+    'node--hub',
+    hub.active ? 'is-active' : '',
+    hub.selected ? 'is-selected' : '',
+    search === 'match' ? 'is-search-match' : '',
+    search === 'dim' ? 'is-search-dim' : '',
+  ]
     .filter(Boolean)
     .join(' ');
 

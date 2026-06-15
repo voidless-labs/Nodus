@@ -242,6 +242,17 @@
   box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent);
 }
 
+/* Search → matching nodes get an accent ring, the rest dim. */
+.node.is-search-match .node-card {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent),
+    0 0 22px -6px color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.node.is-search-dim {
+  opacity: 0.32;
+  transition: opacity var(--transition-fast);
+}
+
 /* Compact → icon + name + meter only, no slider, tighter. */
 .node.is-compact {
   width: 220px;

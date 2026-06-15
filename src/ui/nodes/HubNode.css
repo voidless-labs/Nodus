@@ -114,3 +114,12 @@
   border-color: var(--color-accent);
   box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent);
 }
+.node--hub.is-search-match .node-card {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent),
+    0 0 22px -6px color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.node--hub.is-search-dim {
+  opacity: 0.32;
+  transition: opacity var(--transition-fast);
+}

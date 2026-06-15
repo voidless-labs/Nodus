@@ -19,7 +19,13 @@ function meterLabel(node: NodeModel): string {
   return 'level';
 }
 
-export function NodeCard({ node }: { node: NodeModel }) {
+export function NodeCard({
+  node,
+  search,
+}: {
+  node: NodeModel;
+  search?: 'match' | 'dim';
+}) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
@@ -46,6 +52,8 @@ export function NodeCard({ node }: { node: NodeModel }) {
     node.running === false ? 'is-idle' : '',
     node.selected ? 'is-selected' : '',
     node.compact ? 'is-compact' : '',
+    search === 'match' ? 'is-search-match' : '',
+    search === 'dim' ? 'is-search-dim' : '',
   ]
     .filter(Boolean)
     .join(' ');

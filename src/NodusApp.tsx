@@ -21,6 +21,7 @@ export default function NodusApp() {
   const [live, setLive] = useState(false);
   const [scene, setScene] = useState<Scene>(EMPTY_SCENE);
   const [setupOpen, setSetupOpen] = useState(true);
+  const [search, setSearch] = useState('');
 
   const toggleLive = () => setLive((v) => !v);
   const loadPreset = (id: PresetId) => setScene(buildPreset(id));
@@ -36,12 +37,12 @@ export default function NodusApp() {
           {isEmpty ? (
             <EmptyCanvas onPreset={loadPreset} />
           ) : (
-            <Graph nodes={scene.nodes} edges={scene.edges} hubs={scene.hubs} />
+            <Graph nodes={scene.nodes} edges={scene.edges} hubs={scene.hubs} search={search} />
           )}
         </Canvas>
         <EngineButton live={live} onToggleLive={toggleLive} />
         <ZoomControls />
-        <BottomBar />
+        <BottomBar onSearch={setSearch} />
         <AddPanel nodes={nodeCount} routes={scene.edges.length} />
         {setupOpen && <VirtualDeviceModal onClose={() => setSetupOpen(false)} />}
       </div>

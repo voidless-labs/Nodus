@@ -4,10 +4,11 @@ import './BottomBar.css';
 /**
  * BottomBar — the floating node library (R12), an accent element.
  *
- * A search field over a row of category tabs. Clicking a category slides a
- * panel UP from the bar listing that category's node types; clicking the active
- * category (or outside) slides it back down. Visual only for now — dropping a
- * node on the canvas is wired with the engine in R3.
+ * Search field (top) + category tabs (bottom). Clicking a category expands a
+ * list of that category's node types IN THE MIDDLE of the bar, between the
+ * search and the tabs (the bar grows upward). Typing in the search highlights
+ * matching nodes on the canvas via `onSearch` (the "type a name to highlight"
+ * behavior) and also filters the open category list.
  */
 type Tab = 'recent' | 'all' | 'fx' | 'logic' | 'misc';
 
@@ -52,12 +53,16 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'all', label: 'all' },
   { id: 'fx', label: 'fx' },
   { id: 'logic', label: 'logic' },
-  { id: 'misc', label: 'misc' },
 ];
 
-export function BottomBar() {
+export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
   const [active, setActive] = useState<Tab | null>(null);
   const [q, setQ] = useState('');
+
+  const setQuery = (v: string) => {
+    setQ(v);
+    onSearch?.(v);
+  };
 
   const items = useMemo(() => {
     if (!active) return [];
@@ -72,32 +77,33 @@ export function BottomBar() {
     <>
       {active && <div className="bb-overlay" onClick={() => setActive(null)} />}
       <div className={`bottombar ${active ? 'is-open' : ''}`}>
-        {active && (
-          <div className="bb-pop">
-            <div className="bb-pop-h">{active}</div>
-            <div className="bb-grid">
-              {items.map((n) => (
-                <button key={n.id} className="bb-card" onClick={() => setActive(null)}>
-                  <span className="bb-card-name">{n.name}</span>
-                  <span className="bb-card-sub">{n.sub}</span>
-                </button>
-              ))}
-              {items.length === 0 && <div className="bb-empty">nothing matches “{q}”</div>}
-            </div>
-          </div>
-        )}
-
         <div className="bb-bar">
           <label className="bb-search">
             <SearchIcon />
             <input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => setQuery(e.target.value)}
               placeholder="search nodes · type a name to highlight…"
             />
           </label>
+
+          {active && (
+            <div className="bb-mid">
+              <div className="bb-mid-h">{active}</div>
+              <div className="bb-grid">
+                {items.map((n) => (
+                  <button key={n.id} className="bb-card" onClick={() => setActive(null)}>
+                    <span className="bb-card-name">{n.name}</span>
+                    <span className="bb-card-sub">{n.sub}</span>
+                  </button>
+                ))}
+                {items.length === 0 && <div className="bb-empty">nothing matches “{q}”</div>}
+              </div>
+            </div>
+          )}
+
           <div className="bb-tabs">
-            {TABS.slice(0, 4).map((t) => (
+            {TABS.map((t) => (
               <BBTab key={t.id} active={active === t.id} onClick={() => toggle(t.id)} label={t.label}>
                 <TabIcon id={t.id} />
               </BBTab>

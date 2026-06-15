@@ -23,14 +23,24 @@ function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
 }
 
+/** none = no search; match = name contains the query; dim = search active, no match. */
+export type SearchState = 'match' | 'dim' | undefined;
+
+function searchFor(name: string, q: string): SearchState {
+  if (!q.trim()) return undefined;
+  return name.toLowerCase().includes(q.trim().toLowerCase()) ? 'match' : 'dim';
+}
+
 export function Graph({
   nodes,
   edges,
   hubs = [],
+  search = '',
 }: {
   nodes: NodeModel[];
   edges: EdgeModel[];
   hubs?: HubModel[];
+  search?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [ports, setPorts] = useState<PortMap>({});
@@ -74,10 +84,10 @@ export function Graph({
       </svg>
 
       {hubs.map((h) => (
-        <HubNode key={h.id} hub={h} />
+        <HubNode key={h.id} hub={h} search={searchFor(h.name, search)} />
       ))}
       {nodes.map((n) => (
-        <NodeCard key={n.id} node={n} />
+        <NodeCard key={n.id} node={n} search={searchFor(n.name, search)} />
       ))}
     </div>
   );

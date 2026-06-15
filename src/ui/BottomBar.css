@@ -1,4 +1,6 @@
-/* BottomBar.css — accent node library, bottom-center, with a slide-up panel. */
+/* BottomBar.css — accent node library, bottom-center.
+   The category list expands IN THE MIDDLE of the bar (between the search and
+   the tabs); the bar grows upward (its bottom edge stays put). */
 
 .bb-overlay {
   position: fixed;
@@ -17,9 +19,10 @@
   flex-direction: column;
 }
 
-/* ── The bar itself (accent, ~360x87) ─────────────────────────── */
+/* ── The bar itself (accent) ──────────────────────────────────── */
 .bb-bar {
-  height: 87px;
+  display: flex;
+  flex-direction: column;
   padding: 9px 10px;
   background: var(--gradient-accent-panel);
   border: 1px solid var(--color-border-2);
@@ -51,11 +54,74 @@
   color: var(--color-text-dim);
 }
 
+/* ── Middle expanding list (between search and tabs) ──────────── */
+.bb-mid {
+  margin-top: 9px;
+  animation: bb-mid-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes bb-mid-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.bb-mid-h {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: 2px 4px 8px;
+}
+.bb-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.bb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.bb-card:hover {
+  border-color: var(--color-border-2);
+  background: rgba(255, 255, 255, 0.03);
+}
+.bb-card-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.bb-card-sub {
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+.bb-empty {
+  grid-column: 1 / -1;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--color-text-dim);
+  text-align: center;
+}
+
+/* ── Tabs (bottom row) ────────────────────────────────────────── */
 .bb-tabs {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 9px;
 }
 .bb-spacer {
   flex: 1 1 auto;
@@ -80,7 +146,6 @@
   color: var(--color-text-primary);
   background: rgba(255, 255, 255, 0.08);
 }
-/* the right-hand "misc" tab is a round, more prominent button */
 .bb-tab--round {
   border-radius: 50%;
   width: 30px;
@@ -88,69 +153,4 @@
 .bb-tab--round.is-active {
   color: #161318;
   background: var(--color-text-primary);
-}
-
-/* ── Slide-up panel ───────────────────────────────────────────── */
-.bb-pop {
-  margin-bottom: 9px;
-  padding: 12px;
-  background: var(--gradient-accent-panel);
-  border: 1px solid var(--color-border-2);
-  border-radius: 14px;
-  box-shadow: 0 22px 54px -18px rgba(0, 0, 0, 0.9);
-  animation: bb-rise 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-@keyframes bb-rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.bb-pop-h {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  padding: 2px 4px 10px;
-}
-.bb-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-}
-.bb-card {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 11px 13px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: 10px;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
-}
-.bb-card:hover {
-  border-color: var(--color-border-2);
-  background: #15151a;
-}
-.bb-card-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-}
-.bb-card-sub {
-  font-size: 11px;
-  color: var(--color-text-dim);
-}
-.bb-empty {
-  grid-column: 1 / -1;
-  padding: 14px;
-  font-size: 12px;
-  color: var(--color-text-dim);
-  text-align: center;
 }
