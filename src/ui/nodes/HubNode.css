@@ -9,17 +9,20 @@
   color: var(--color-type-hub);
 }
 
-/* ── Inputs list ──────────────────────────────────────────────── */
+/* ── Inputs list on a recessed panel (like the "input level" block) ─ */
 .hub-inputs {
   margin-top: 15px;
-  position: relative;
+  padding: 11px 12px 12px;
+  background: var(--color-node-inset);
+  border: 1px solid var(--color-node-inset-border);
+  border-radius: 10px;
 }
 .hub-inputs-h {
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-text-muted);
-  margin: 0 0 10px 1px;
+  margin: 0 0 11px 1px;
 }
 .hub-in-row {
   display: flex;
@@ -49,7 +52,7 @@
 /* input connection nubs ride the card's left edge, one per row */
 .node-port.hub-port-in {
   position: absolute;
-  left: -20px; /* card padding (18) + 2 → on the border */
+  left: -38px; /* card pad (18) + inset pad (12) → centered on the card's outer edge */
   top: 50%;
   transform: translateY(-50%);
   width: 11px;
