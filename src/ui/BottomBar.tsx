@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import './BottomBar.css';
 
 /**
@@ -57,6 +57,9 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
   const [active, setActive] = useState<Tab | null>(null);
+  // Remember the last category so the list keeps its content while it
+  // animates closed (the wrapper stays mounted for a smooth height collapse).
+  const [lastTab, setLastTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
 
   const setQuery = (v: string) => {
@@ -64,14 +67,20 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
     onSearch?.(v);
   };
 
-  const items = useMemo(() => {
-    if (!active) return [];
-    const list = CATALOG[active];
+  const shownTab = active ?? lastTab;
+  // Show the whole category; while typing, matching items are highlighted (not
+  // filtered out) — same idea as the canvas highlight.
+  const items = CATALOG[shownTab];
+  const matchOf = (name: string): 'match' | 'dim' | '' => {
     const t = q.trim().toLowerCase();
-    return t ? list.filter((n) => n.name.toLowerCase().includes(t)) : list;
-  }, [active, q]);
+    if (!t) return '';
+    return name.toLowerCase().includes(t) ? 'match' : 'dim';
+  };
 
-  const toggle = (t: Tab) => setActive((cur) => (cur === t ? null : t));
+  const toggle = (t: Tab) => {
+    setLastTab(t);
+    setActive((cur) => (cur === t ? null : t));
+  };
 
   return (
     <>
@@ -87,20 +96,29 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
             />
           </label>
 
-          {active && (
-            <div className="bb-mid">
-              <div className="bb-mid-h">{active}</div>
-              <div className="bb-grid">
-                {items.map((n) => (
-                  <button key={n.id} className="bb-card" onClick={() => setActive(null)}>
-                    <span className="bb-card-name">{n.name}</span>
-                    <span className="bb-card-sub">{n.sub}</span>
-                  </button>
-                ))}
-                {items.length === 0 && <div className="bb-empty">nothing matches “{q}”</div>}
+          <div className={`bb-mid-wrap ${active ? 'is-open' : ''}`} aria-hidden={!active}>
+            <div className="bb-mid-inner">
+              <div className="bb-mid">
+                <div className="bb-mid-h">{shownTab}</div>
+                <div className="bb-grid">
+                  {items.map((n) => {
+                    const m = matchOf(n.name);
+                    return (
+                      <button
+                        key={n.id}
+                        className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
+                        tabIndex={active ? 0 : -1}
+                        onClick={() => setActive(null)}
+                      >
+                        <span className="bb-card-name">{n.name}</span>
+                        <span className="bb-card-sub">{n.sub}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          )}
+          </div>
 
           <div className="bb-tabs">
             {TABS.map((t) => (
