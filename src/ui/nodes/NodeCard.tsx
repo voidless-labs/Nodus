@@ -1,7 +1,10 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import './NodeCard.css';
 import { KIND_COLOR_VAR, kindLabel, type NodeModel } from './types';
 import { NodeIcon } from './NodeIcon';
+import { VolumeSlider } from './VolumeSlider';
+import { NodeToolbar } from './NodeToolbar';
+import { EditableName } from './EditableName';
 
 /**
  * NodeCard — one node on the canvas (R4, matched to Node-design-v2).
@@ -22,16 +25,31 @@ function meterLabel(node: NodeModel): string {
 export function NodeCard({
   node,
   search,
+  actions,
+  onVolume,
+  onMute,
+  onSolo,
+  onDuplicate,
+  onDelete,
+  onRename,
 }: {
   node: NodeModel;
   search?: 'match' | 'dim';
+  /** Show the action toolbar (sole selected node) — R20. */
+  actions?: boolean;
+  onVolume?: (id: string, volume: number) => void;
+  onMute?: (id: string) => void;
+  onSolo?: (id: string) => void;
+  onDuplicate?: (id: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, name: string) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
   const colorVar = `var(${KIND_COLOR_VAR[node.kind]})`;
 
-  const onMove = (e: React.MouseEvent) => {
+  const onGlowMove = (e: React.MouseEvent) => {
     if (rafRef.current != null) return;
     const card = cardRef.current;
     if (!card) return;
@@ -58,20 +76,29 @@ export function NodeCard({
     .filter(Boolean)
     .join(' ');
 
-  const pct = Math.round(node.volume * 100);
-
   return (
     <div
       className={classes}
+      data-node-id={node.id}
       style={{ left: node.x, top: node.y, ['--type-color' as string]: colorVar }}
     >
       <div className="node-label">
         <span className="node-label-dot" />
         {kindLabel(node.kind, node.micSink)}
+        {node.solo && <span className="node-solo-tag">solo</span>}
       </div>
 
-      <div className="node-card" ref={cardRef} onMouseMove={onMove}>
+      <div className="node-card" ref={cardRef} onMouseMove={onGlowMove}>
         <div className="node-glow" aria-hidden />
+
+        {actions && (
+          <NodeToolbar
+            soloActive={node.solo}
+            onSolo={onSolo ? () => onSolo(node.id) : undefined}
+            onDuplicate={() => onDuplicate?.(node.id)}
+            onDelete={() => onDelete?.(node.id)}
+          />
+        )}
 
         {node.hasInput !== false && (
           <span className="node-port node-port--in" data-node={node.id} data-side="in" data-port="" />
@@ -83,7 +110,11 @@ export function NodeCard({
         <div className="node-head">
           <NodeIcon node={node} />
           <div className="node-titles">
-            <div className="node-name">{node.name}</div>
+            <EditableName
+              className="node-name"
+              value={node.name}
+              onRename={onRename ? (name) => onRename(node.id, name) : undefined}
+            />
             <div className="node-sub">{node.subtitle}</div>
           </div>
         </div>
@@ -96,18 +127,19 @@ export function NodeCard({
         </div>
 
         <div className="node-vol">
-          <button className="node-mute" title={node.muted ? 'unmute' : 'mute'} aria-label="mute">
+          <button
+            className="node-mute"
+            title={node.muted ? 'unmute' : 'mute'}
+            aria-label="mute"
+            onClick={() => onMute?.(node.id)}
+          >
             {node.muted ? <IconMuted /> : <IconSpeaker />}
           </button>
-          <input
-            className="node-slider"
-            type="range"
-            min={0}
-            max={100}
-            defaultValue={pct}
-            aria-label="volume"
+          <VolumeSlider
+            value={node.volume}
+            onChange={(v) => onVolume?.(node.id, v)}
+            ariaLabel="volume"
           />
-          <span className="node-vol-pct">{pct}%</span>
         </div>
       </div>
     </div>

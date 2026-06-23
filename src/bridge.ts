@@ -38,6 +38,8 @@ export interface AudioProcess {
   pid: number;
   display_name: string;
   source_type: SourceType;
+  /** App icon extracted from the .exe as a PNG data URL (R7). null if unavailable. */
+  icon?: string | null;
 }
 
 export type BackendNodeType = 'source' | 'output' | 'splitter' | 'mixer' | 'virtual';

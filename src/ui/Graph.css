@@ -3,6 +3,36 @@
 .graph {
   position: absolute;
   inset: 0;
+  /* panned/zoomed content is clipped by the enclosing .canvas (overflow:hidden) */
+}
+.graph.is-panning {
+  cursor: grabbing;
+}
+
+/* Rubber-band selection rectangle (screen space, above the world). */
+.marquee {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* The pan/zoom "world": nodes + wires share this transform (R21).
+   No persistent `will-change` — a cached scaled layer makes text blurry at zoom
+   (and flicker on hover). We promote it ONLY while actively panning, so the idle
+   state re-rasterizes crisply at the current zoom. */
+.graph-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+}
+.graph.is-panning .graph-world {
+  will-change: transform;
 }
 
 /* Wires sit behind the cards (DOM order + this layer fills the surface). */
@@ -33,4 +63,10 @@
 .edge.is-muted {
   stroke: var(--color-muted-edge);
   stroke-dasharray: 6 5;
+}
+
+/* Selected = popover open: amber accent. */
+.edge.is-selected {
+  stroke: var(--color-accent);
+  filter: drop-shadow(0 0 4px var(--color-accent-soft));
 }

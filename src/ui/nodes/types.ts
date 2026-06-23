@@ -5,8 +5,9 @@ export type NodeKind =
   | 'output' // headphones / speakers / OBS the audio goes TO
   | 'virtual' // a Nodus virtual device (speaker, or mic-sink)
   | 'hub' // optional routing hub ("mixer") node
+  | 'splitter' // 1 input → many outputs
   | 'fx' // an effect on a route
-  | 'logic'; // PTT / hotkey / toggle
+  | 'logic'; // PTT / hotkey / toggle / condition
 
 /** CSS custom-property name carrying each kind's color and glow. */
 export const KIND_COLOR_VAR: Record<NodeKind, string> = {
@@ -14,6 +15,7 @@ export const KIND_COLOR_VAR: Record<NodeKind, string> = {
   output: '--color-type-output',
   virtual: '--color-type-virtual',
   hub: '--color-type-hub',
+  splitter: '--color-type-hub',
   fx: '--color-type-fx',
   logic: '--color-type-logic',
 };
@@ -40,8 +42,10 @@ export interface NodeModel {
   name: string;
   /** Secondary line: system device name or status. */
   subtitle: string;
-  /** Single-letter avatar fallback until real app icons land (R7). */
+  /** Single-letter avatar fallback when there's no real icon. */
   avatar?: string;
+  /** Real app icon as a data URL (extracted from the .exe, R7). */
+  icon?: string;
   /** Backend keys for live-level matching (volume-levels event). */
   deviceId?: string;
   exeName?: string;
@@ -50,6 +54,8 @@ export interface NodeModel {
   /** Route/source volume 0..1. */
   volume: number;
   muted?: boolean;
+  /** Solo: when any node is soloed, all non-soloed nodes are effectively muted. */
+  solo?: boolean;
   /** Audio is currently flowing → static glow + live meter. */
   active?: boolean;
   /** For app sources: the process is not running. */
@@ -88,6 +94,10 @@ export interface EdgeModel {
   to: string; // target node id (input port)
   /** Target a specific labeled input (hub nodes); default = the node's single input. */
   toPort?: string;
+  /** Per-route trim gain 0..1 (default 1). This is the value sent to the engine. */
+  volume?: number;
+  /** Per-route stereo balance -1..1 (default 0). */
+  pan?: number;
   active?: boolean; // audio flowing → brighter + faint glow
   muted?: boolean; // dashed, dim red
 }

@@ -144,6 +144,12 @@
   background: color-mix(in srgb, var(--c) 16%, var(--color-surface));
   color: var(--c);
 }
+.ap-row-icon-img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: contain;
+}
 .ap-row-text {
   flex: 1 1 auto;
   min-width: 0;

@@ -1,8 +1,9 @@
 /* HubNode.css — the "Stream Mix" node. Reuses the polished .node-card; adds a
-   per-input volume list (mixer body) and the mix output. */
+   per-input volume list (mixer body) and the mix output.
+   Dimensions reduced ~1.5x to match the smaller NodeCard (R21 follow-up). */
 
 .node--hub {
-  width: 260px;
+  width: 196px; /* same width as every other node */
   --type-color: var(--color-type-hub);
 }
 .node--hub .node-icon {
@@ -11,95 +12,148 @@
 
 /* ── Inputs list on a recessed panel (like the "input level" block) ─ */
 .hub-inputs {
-  margin-top: 15px;
-  padding: 11px 12px 12px;
+  margin-top: 10px;
+  padding: 7px 8px 8px;
   background: var(--color-node-inset);
   border: 1px solid var(--color-node-inset-border);
-  border-radius: 10px;
+  border-radius: 7px;
 }
 .hub-inputs-h {
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-text-muted);
-  margin: 0 0 11px 1px;
+  margin: 0 0 7px 1px;
+}
+
+/* Ghost "add" input: always one trailing inactive port. A faint dashed circle
+   with a "+" — subtle, but enough to read as a drop target; brightens on hover. */
+.hub-add-row {
+  opacity: 0.7;
+}
+.hub-add-row:hover {
+  opacity: 1;
+}
+.node-port.hub-port-add {
+  position: absolute;
+  left: -27px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  /* inactive look: muted dashed ring (not the active green) */
+  border: 1px dashed var(--color-text-muted);
+  box-shadow: none;
+  color: var(--color-text-dim);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
+    color var(--transition-fast);
+}
+/* "+" as a crisp SVG (viewBox-centred, no subpixel drift). */
+.hub-add-plus {
+  width: 7px;
+  height: 7px;
+  pointer-events: none;
+}
+/* hover = valid drop target: turn green. */
+.hub-add-row:hover .hub-port-add {
+  border-color: var(--color-type-source);
+  border-style: solid;
+  color: var(--color-type-source);
+  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
+}
+.hub-add-hint {
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+.hub-in-x {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.hub-in-x:hover {
+  color: #f0a0a0;
+  background: rgba(127, 46, 46, 0.16);
 }
 .hub-in-row {
   display: flex;
   align-items: center;
-  gap: 11px;
-  margin-bottom: 11px;
+  gap: 7px;
+  margin-bottom: 7px;
+  position: relative;
 }
 .hub-in-row:last-child {
   margin-bottom: 0;
 }
 .hub-in-name {
-  flex: 0 0 42px;
-  font-size: 12.5px;
+  flex: 0 0 28px;
+  font-size: 10px;
   color: var(--color-text-secondary);
 }
 .hub-slider {
   flex: 1 1 auto;
-}
-.hub-in-pct {
-  flex: 0 0 auto;
-  width: 32px;
-  text-align: right;
-  font-size: 11px;
-  color: var(--color-text-dim);
+  min-width: 0;
 }
 
 /* input connection nubs ride the card's left edge, one per row */
 .node-port.hub-port-in {
   position: absolute;
-  left: -38px; /* card pad (18) + inset pad (12) → centered on the card's outer edge */
+  left: -27px; /* card pad (12) + inset pad (8) → centered on the card's outer edge */
   top: 50%;
   transform: translateY(-50%);
-  width: 11px;
-  height: 11px;
+  width: 9px;
+  height: 9px;
   background: var(--color-type-source);
   border: 2px solid var(--color-canvas);
   box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
-}
-.hub-in-row {
-  position: relative;
 }
 
 /* ── Mix output ───────────────────────────────────────────────── */
 .hub-out {
   display: flex;
   align-items: center;
-  gap: 11px;
-  margin-top: 15px;
-  padding-top: 13px;
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 9px;
   border-top: 1px solid var(--color-border);
 }
 .hub-out-label {
   flex: 0 0 auto;
-  font-size: 12.5px;
+  font-size: 10px;
   color: var(--color-text-secondary);
 }
 .hub-meter {
   flex: 1 1 auto;
-  height: 5px;
-  border-radius: 3px;
+  height: 4px;
+  border-radius: 2px;
   background: rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
 .hub-meter-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--color-accent);
-  box-shadow: 0 0 7px -1px var(--color-accent);
+  box-shadow: 0 0 5px -1px var(--color-accent);
   transition: width 90ms linear;
 }
 .node-port.hub-port-out {
   position: absolute;
-  right: -6px;
+  right: -5px;
   top: 50%;
   transform: translateY(-50%);
-  width: 11px;
-  height: 11px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--color-accent);
   border: 2px solid var(--color-canvas);

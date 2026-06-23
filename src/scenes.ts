@@ -25,7 +25,7 @@ function streamScene(): Scene {
   const hubs: HubModel[] = [
     {
       id: 'mix',
-      name: 'Stream Mix',
+      name: 'Mixer',
       subtitle: 'routing engine',
       inputs: [
         { id: 'mic', label: 'mic', volume: 0.92 },

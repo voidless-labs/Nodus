@@ -13,7 +13,16 @@ import type { AudioDevice, AudioProcess, SourceType } from '../bridge';
  */
 type Glyph = 'music' | 'game' | 'mic' | 'headphones' | 'speaker';
 type TypeColor = 'source' | 'output' | 'virtual';
-type AddItem = { id: string; name: string; sub: string; glyph: Glyph; color: TypeColor };
+type AddItem = {
+  id: string;
+  name: string;
+  sub: string;
+  glyph: Glyph;
+  color: TypeColor;
+  icon?: string | null;
+  device?: AudioDevice;
+  process?: AudioProcess;
+};
 
 function processGlyph(t: SourceType): Glyph {
   if (t === 'music') return 'music';
@@ -28,6 +37,8 @@ function processToItem(p: AudioProcess): AddItem {
     sub: p.source_type === 'unknown' ? 'app' : p.source_type,
     glyph: processGlyph(p.source_type),
     color: 'source',
+    icon: p.icon,
+    process: p,
   };
 }
 
@@ -48,7 +59,7 @@ function deviceToItem(d: AudioDevice): AddItem {
   // Strip the trailing "(System name)" for a cleaner primary label.
   const name = d.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || d.name;
   const sub = d.original_name ?? d.name.match(/\(([^)]*)\)\s*$/)?.[1] ?? d.device_type;
-  return { id: `dev:${d.id}`, name, sub, glyph, color };
+  return { id: `dev:${d.id}`, name, sub, glyph, color, device: d };
 }
 
 export function AddPanel({
@@ -56,11 +67,15 @@ export function AddPanel({
   routes,
   devices: rawDevices,
   processes,
+  onAddDevice,
+  onAddProcess,
 }: {
   nodes: number;
   routes: number;
   devices: AudioDevice[];
   processes: AudioProcess[];
+  onAddDevice?: (d: AudioDevice) => void;
+  onAddProcess?: (p: AudioProcess) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -71,9 +86,26 @@ export function AddPanel({
     return [f(processes.map(processToItem)), f(rawDevices.map(deviceToItem))];
   }, [q, processes, rawDevices]);
 
-  const pick = () => {
+  const pick = (item: AddItem) => {
+    if (item.device) onAddDevice?.(item.device);
+    else if (item.process) onAddProcess?.(item.process);
     setOpen(false);
     setQ('');
+  };
+
+  // Drag a row onto the canvas to place the node exactly where you drop it.
+  // Close the panel so the canvas becomes the drop target (the drag image is
+  // already captured by the browser, so it survives the unmount).
+  const onRowDragStart = (e: React.DragEvent, item: AddItem) => {
+    const payload = item.device
+      ? { kind: 'device', id: item.device.id }
+      : item.process
+        ? { kind: 'process', id: item.process.exe_name }
+        : null;
+    if (!payload) return;
+    e.dataTransfer.setData('application/nodus-add', JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+    setOpen(false);
   };
 
   return (
@@ -97,7 +129,12 @@ export function AddPanel({
                 <div className="ap-section">
                   <div className="ap-section-h">playing now</div>
                   {apps.map((it) => (
-                    <AddRow key={it.id} item={it} onClick={pick} />
+                    <AddRow
+                      key={it.id}
+                      item={it}
+                      onClick={() => pick(it)}
+                      onDragStart={(e) => onRowDragStart(e, it)}
+                    />
                   ))}
                 </div>
               )}
@@ -105,7 +142,12 @@ export function AddPanel({
                 <div className="ap-section">
                   <div className="ap-section-h">devices</div>
                   {devices.map((it) => (
-                    <AddRow key={it.id} item={it} onClick={pick} />
+                    <AddRow
+                      key={it.id}
+                      item={it}
+                      onClick={() => pick(it)}
+                      onDragStart={(e) => onRowDragStart(e, it)}
+                    />
                   ))}
                 </div>
               )}
@@ -135,15 +177,29 @@ export function AddPanel({
   );
 }
 
-function AddRow({ item, onClick }: { item: AddItem; onClick: () => void }) {
+function AddRow({
+  item,
+  onClick,
+  onDragStart,
+}: {
+  item: AddItem;
+  onClick: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+}) {
   return (
     <button
       className="ap-row"
+      draggable
       onClick={onClick}
+      onDragStart={onDragStart}
       style={{ ['--c' as string]: `var(--color-type-${item.color})` }}
     >
       <span className="ap-row-icon">
-        <Glyph kind={item.glyph} />
+        {item.icon ? (
+          <img className="ap-row-icon-img" src={item.icon} alt="" draggable={false} />
+        ) : (
+          <Glyph kind={item.glyph} />
+        )}
       </span>
       <span className="ap-row-text">
         <span className="ap-row-name">{item.name}</span>

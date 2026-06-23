@@ -1,0 +1,166 @@
+/* EdgePopover.css — per-route controls floating on a wire (R9). */
+
+.edge-popover {
+  position: absolute;
+  z-index: 6; /* above wires + cards, below modals */
+  width: 208px;
+  transform: translate(-50%, calc(-100% - 12px)); /* centered, above the click point */
+  background: var(--color-node-bg);
+  border: 1px solid var(--color-node-border);
+  border-radius: var(--radius-popover);
+  box-shadow: var(--shadow-node);
+  padding: 10px 12px 12px;
+  font-family: var(--font-family);
+  animation: ep-in var(--transition-pop);
+}
+
+@keyframes ep-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - 6px));
+  }
+}
+
+/* little stem pointing down to the wire */
+.edge-popover::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--color-node-bg);
+  border-right: 1px solid var(--color-node-border);
+  border-bottom: 1px solid var(--color-node-border);
+}
+
+.ep-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ep-title {
+  font-size: var(--font-size-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+}
+.ep-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.ep-close:hover {
+  color: var(--color-text-primary);
+  background: #202024;
+}
+
+.ep-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+
+.ep-mute {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-node-border);
+  background: var(--color-node-inset);
+  color: var(--color-text-secondary);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.ep-mute:hover {
+  color: var(--color-text-primary);
+  background: #202024;
+}
+.ep-mute.is-muted {
+  color: var(--color-muted-edge);
+  border-color: var(--color-muted-edge);
+}
+
+.ep-slider {
+  flex: 1 1 auto;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+}
+.ep-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+}
+.ep-slider::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  border: none;
+}
+
+.ep-val {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  width: 34px;
+  text-align: right;
+}
+
+.ep-bal-end {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--color-text-dim);
+  width: 12px;
+  text-align: center;
+}
+.ep-bal-label {
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-text-dim);
+  margin: -2px 0 8px;
+}
+
+.ep-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid var(--color-node-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 8px;
+  font-family: var(--font-family);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.ep-delete:hover {
+  color: #f0a0a0;
+  border-color: var(--color-muted-edge);
+  background: rgba(127, 46, 46, 0.12);
+}

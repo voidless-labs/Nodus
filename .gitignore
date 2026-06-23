@@ -49,5 +49,9 @@ ewdk.iso
 Thumbs.db
 desktop.ini
 
-# ── Claude Code local settings (keep shared .claude/settings.json if added) ──
-.claude/settings.local.json
+# ── Local development files (kept on disk, out of the repo) ─────────────────
+# Claude Code config/agents, project task board & notes, dev prompts.
+.claude/
+.nodus/
+CLAUDE.md
+START_PROMPT.md

@@ -1,0 +1,76 @@
+/* SelectionBar.css — floating multi-select toolbar, top-centre of the canvas. */
+
+.selbar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 12px;
+  background: var(--color-node-bg);
+  border: 1px solid var(--color-node-border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-node);
+  font-family: var(--font-family);
+  animation: selbar-in var(--transition-pop);
+}
+@keyframes selbar-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+}
+
+.selbar-count {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.selbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--color-node-border);
+  margin: 0 4px;
+}
+.selbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  font-family: var(--font-family);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.selbar-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-panel-2);
+}
+.selbar-btn--danger:hover {
+  color: #f0a0a0;
+  background: rgba(127, 46, 46, 0.16);
+}
+.selbar-x {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.selbar-x:hover {
+  color: var(--color-text-primary);
+  background: var(--color-panel-2);
+}

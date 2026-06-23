@@ -1,6 +1,6 @@
 [package]
 name = "nodus"
-version = "0.1.0"
+version = "0.5.0"
 description = "Nodus — Node-based Virtual Audio Router"
 authors = ["Nodus"]
 license = ""
@@ -82,6 +82,10 @@ windows = { version = "0.58", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    # R7 app-icon extraction: shell icon → GDI raster.
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 
 [features]

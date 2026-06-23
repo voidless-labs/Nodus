@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import './BottomBar.css';
+import type { AudioDevice } from '../bridge';
+import { EditableName } from './nodes/EditableName';
 
 /**
  * BottomBar — the floating node library (R12), an accent element.
@@ -10,56 +12,64 @@ import './BottomBar.css';
  * matching nodes on the canvas via `onSearch` (the "type a name to highlight"
  * behavior) and also filters the open category list.
  */
-type Tab = 'recent' | 'all' | 'fx' | 'logic' | 'misc';
+type Tab = 'routing' | 'virtual' | 'fx' | 'logic';
 
 type NodeType = { id: string; name: string; sub: string };
 
-const CATALOG: Record<Tab, NodeType[]> = {
-  recent: [
-    { id: 'spotify', name: 'Spotify', sub: 'source' },
-    { id: 'headphones', name: 'Headphones', sub: 'output' },
-    { id: 'nodusmic', name: 'Nodus Mic', sub: 'virtual' },
-  ],
-  all: [
-    { id: 'source', name: 'Source', sub: 'app or microphone' },
-    { id: 'output', name: 'Output', sub: 'speakers / OBS' },
-    { id: 'hub', name: 'Stream Mix', sub: 'routing hub' },
-    { id: 'virtual', name: 'Virtual device', sub: 'Nodus speaker / mic' },
-    { id: 'fx', name: 'Effect', sub: 'on a route' },
-    { id: 'logic', name: 'Logic', sub: 'condition / trigger' },
+// The node palette. Real sources/outputs are added via "+ add" (detected
+// apps/devices); this palette holds the abstract routing nodes + effects/logic.
+// Virtual devices live in their own panel (created, not generic placeholders).
+const CATALOG: Record<'routing' | 'fx' | 'logic', NodeType[]> = {
+  routing: [
+    { id: 'mixer', name: 'Mixer', sub: 'many → one' },
+    { id: 'splitter', name: 'Splitter', sub: 'one → many' },
   ],
   fx: [
-    { id: 'eq', name: 'EQ', sub: 'equalizer' },
-    { id: 'comp', name: 'Compressor', sub: 'dynamics' },
-    { id: 'gain', name: 'Gain', sub: 'level' },
-    { id: 'limiter', name: 'Limiter', sub: 'ceiling' },
-    { id: 'reverb', name: 'Reverb', sub: 'space' },
     { id: 'gate', name: 'Noise Gate', sub: 'cleanup' },
+    { id: 'comp', name: 'Compressor', sub: 'dynamics' },
+    { id: 'limiter', name: 'Limiter', sub: 'ceiling' },
+    { id: 'eq', name: 'EQ', sub: 'equalizer' },
+    { id: 'gain', name: 'Gain', sub: 'level / trim' },
   ],
   logic: [
-    { id: 'ptt', name: 'Push-to-Talk', sub: 'hold a key' },
-    { id: 'hotkey', name: 'Hotkey', sub: 'toggle on key' },
-    { id: 'toggle', name: 'Toggle', sub: 'on / off' },
-    { id: 'timer', name: 'Timer', sub: 'time window' },
-  ],
-  misc: [
-    { id: 'streammix', name: 'Stream Mix', sub: 'preset' },
-    { id: 'midi', name: 'MIDI', sub: 'control' },
+    { id: 'duck', name: 'Ducking', sub: 'lower on trigger' },
+    { id: 'trigger', name: 'Push-to-Talk', sub: 'hold a key' },
   ],
 };
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'recent', label: 'recent' },
-  { id: 'all', label: 'all' },
+  { id: 'routing', label: 'routing' },
+  { id: 'virtual', label: 'virtual' },
   { id: 'fx', label: 'fx' },
   { id: 'logic', label: 'logic' },
 ];
 
-export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
+export function BottomBar({
+  onSearch,
+  virtualOwn = [],
+  virtualOther = [],
+  createdIds,
+  editingId,
+  onCreateVirtual,
+  onRenameVirtual,
+  onDeleteVirtual,
+}: {
+  onSearch?: (q: string) => void;
+  /** Nodus's own virtual devices (created + branded) and third-party ones. */
+  virtualOwn?: AudioDevice[];
+  virtualOther?: AudioDevice[];
+  /** Ids of user-created virtual devices — these are renamable / deletable. */
+  createdIds?: Set<string>;
+  /** A just-created device id — its name field opens for editing. */
+  editingId?: string | null;
+  onCreateVirtual?: () => void;
+  onRenameVirtual?: (id: string, name: string) => void;
+  onDeleteVirtual?: (id: string) => void;
+}) {
   const [active, setActive] = useState<Tab | null>(null);
   // Remember the last category so the list keeps its content while it
   // animates closed (the wrapper stays mounted for a smooth height collapse).
-  const [lastTab, setLastTab] = useState<Tab>('all');
+  const [lastTab, setLastTab] = useState<Tab>('routing');
   const [q, setQ] = useState('');
 
   const setQuery = (v: string) => {
@@ -70,7 +80,7 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
   const shownTab = active ?? lastTab;
   // Show the whole category; while typing, matching items are highlighted (not
   // filtered out) — same idea as the canvas highlight.
-  const items = CATALOG[shownTab];
+  const items = shownTab === 'virtual' ? [] : CATALOG[shownTab];
   const matchOf = (name: string): 'match' | 'dim' | '' => {
     const t = q.trim().toLowerCase();
     if (!t) return '';
@@ -80,6 +90,65 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
   const toggle = (t: Tab) => {
     setLastTab(t);
     setActive((cur) => (cur === t ? null : t));
+  };
+
+  // Drag a catalog card onto the canvas → create that node type where dropped.
+  const onCardDragStart = (e: React.DragEvent, typeId: string) => {
+    e.dataTransfer.setData('application/nodus-add', JSON.stringify({ kind: 'type', id: typeId }));
+    e.dataTransfer.effectAllowed = 'copy';
+    setActive(null);
+  };
+  // Drag a virtual device → an instance node bound to it (drag again = another
+  // instance of the SAME device).
+  const onDeviceDragStart = (e: React.DragEvent, deviceId: string) => {
+    e.dataTransfer.setData('application/nodus-add', JSON.stringify({ kind: 'device', id: deviceId }));
+    e.dataTransfer.effectAllowed = 'copy';
+    setActive(null);
+  };
+
+  const deviceCard = (dev: AudioDevice) => {
+    const name = dev.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || dev.name;
+    const m = matchOf(name);
+    const created = createdIds?.has(dev.id) ?? false;
+    return (
+      <div
+        key={dev.id}
+        className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
+        role="button"
+        tabIndex={active ? 0 : -1}
+        draggable
+        onDragStart={(e) => onDeviceDragStart(e, dev.id)}
+      >
+        {created ? (
+          <EditableName
+            className="bb-card-name"
+            value={dev.name}
+            autoEdit={editingId === dev.id}
+            placeholder="Set a name for the virtual mic"
+            onRename={(nm) => onRenameVirtual?.(dev.id, nm)}
+          />
+        ) : (
+          <span className="bb-card-name">{name}</span>
+        )}
+        <span className="bb-card-sub">virtual device · drag to add</span>
+        {created && (
+          <button
+            className="bb-card-x"
+            aria-label="delete device"
+            title="delete device"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteVirtual?.(dev.id);
+            }}
+            onDragStart={(e) => e.preventDefault()}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -100,22 +169,47 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
             <div className="bb-mid-inner">
               <div className="bb-mid">
                 <div className="bb-mid-h">{shownTab}</div>
-                <div className="bb-grid">
-                  {items.map((n) => {
-                    const m = matchOf(n.name);
-                    return (
+                {shownTab === 'virtual' ? (
+                  <>
+                    <div className="bb-group-h">ours</div>
+                    <div className="bb-grid">
+                      {virtualOwn.map((dev) => deviceCard(dev))}
                       <button
-                        key={n.id}
-                        className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
+                        className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
-                        onClick={() => setActive(null)}
+                        onClick={() => onCreateVirtual?.()}
                       >
-                        <span className="bb-card-name">{n.name}</span>
-                        <span className="bb-card-sub">{n.sub}</span>
+                        <span className="bb-card-name">+ new device</span>
+                        <span className="bb-card-sub">create a virtual mic</span>
                       </button>
-                    );
-                  })}
-                </div>
+                    </div>
+                    {virtualOther.length > 0 && (
+                      <>
+                        <div className="bb-group-h">other</div>
+                        <div className="bb-grid">{virtualOther.map((dev) => deviceCard(dev))}</div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <div className="bb-grid">
+                    {items.map((n) => {
+                      const m = matchOf(n.name);
+                      return (
+                        <button
+                          key={n.id}
+                          className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
+                          tabIndex={active ? 0 : -1}
+                          draggable
+                          onDragStart={(e) => onCardDragStart(e, n.id)}
+                          onClick={() => setActive(null)}
+                        >
+                          <span className="bb-card-name">{n.name}</span>
+                          <span className="bb-card-sub">{n.sub}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -126,10 +220,6 @@ export function BottomBar({ onSearch }: { onSearch?: (q: string) => void }) {
                 <TabIcon id={t.id} />
               </BBTab>
             ))}
-            <div className="bb-spacer" />
-            <BBTab active={active === 'misc'} onClick={() => toggle('misc')} label="misc" round>
-              <TabIcon id="misc" />
-            </BBTab>
           </div>
         </div>
       </div>
@@ -182,20 +272,20 @@ function SearchIcon() {
 }
 function TabIcon({ id }: { id: Tab }) {
   switch (id) {
-    case 'recent':
+    case 'routing':
       return (
         <svg {...IC}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7v5l3 2" />
+          <circle cx="6" cy="6" r="2.5" />
+          <circle cx="6" cy="18" r="2.5" />
+          <circle cx="18" cy="12" r="2.5" />
+          <path d="M8.2 7 15.8 11M8.2 17 15.8 13" />
         </svg>
       );
-    case 'all':
+    case 'virtual':
       return (
         <svg {...IC}>
-          <rect x="3" y="3" width="7" height="7" rx="1.5" />
-          <rect x="14" y="3" width="7" height="7" rx="1.5" />
-          <rect x="3" y="14" width="7" height="7" rx="1.5" />
-          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          <rect x="9" y="2" width="6" height="11" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0M12 17v4" />
         </svg>
       );
     case 'fx':
@@ -208,12 +298,6 @@ function TabIcon({ id }: { id: Tab }) {
       return (
         <svg {...IC}>
           <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
-        </svg>
-      );
-    case 'misc':
-      return (
-        <svg {...IC}>
-          <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
         </svg>
       );
   }

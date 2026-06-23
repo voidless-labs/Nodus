@@ -43,6 +43,9 @@ pub struct AudioProcess {
     pub pid: u32,
     pub display_name: String,
     pub source_type: SourceType,
+    /// App icon as a PNG data URL, extracted from the .exe (R7). None if unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// Map from known exe names to (display_name, source_type).
@@ -105,13 +108,15 @@ mod platform {
             if !seen.contains_key(&key) {
                 if let Some((display_name, source_type)) = classify_exe(&exe_name) {
                     debug!("detected audio process: {exe_name} (pid {})", entry.th32ProcessID);
+                    let pid = entry.th32ProcessID;
                     seen.insert(
                         key,
                         AudioProcess {
                             exe_name: exe_name.clone(),
-                            pid: entry.th32ProcessID,
+                            pid,
                             display_name: display_name.to_string(),
                             source_type,
+                            icon: crate::detection::icon::icon_data_url(pid, &exe_name),
                         },
                     );
                 }

@@ -1,6 +1,9 @@
 import { useRef } from 'react';
 import './HubNode.css';
 import type { HubModel } from './types';
+import { VolumeSlider } from './VolumeSlider';
+import { NodeToolbar } from './NodeToolbar';
+import { EditableName } from './EditableName';
 
 /**
  * HubNode — the "Stream Mix" routing node (R5).
@@ -11,11 +14,29 @@ import type { HubModel } from './types';
  * ports ride the card's left edge at their rows; the output port is on the
  * right. Cursor-reactive border in the hub's blue type color.
  */
-export function HubNode({ hub, search }: { hub: HubModel; search?: 'match' | 'dim' }) {
+export function HubNode({
+  hub,
+  search,
+  actions,
+  onRemoveInput,
+  onDuplicate,
+  onDelete,
+  onRename,
+}: {
+  hub: HubModel;
+  search?: 'match' | 'dim';
+  /** Show the action toolbar (sole selected node) — R20. */
+  actions?: boolean;
+  /** Remove a mixer input (R24). Adding is via the trailing ghost port. */
+  onRemoveInput?: (hubId: string, inputId: string) => void;
+  onDuplicate?: (id: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, name: string) => void;
+}) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
-  const onMove = (e: React.MouseEvent) => {
+  const onGlowMove = (e: React.MouseEvent) => {
     if (rafRef.current != null) return;
     const card = cardRef.current;
     if (!card) return;
@@ -40,14 +61,21 @@ export function HubNode({ hub, search }: { hub: HubModel; search?: 'match' | 'di
     .join(' ');
 
   return (
-    <div className={classes} style={{ left: hub.x, top: hub.y }}>
+    <div className={classes} data-node-id={hub.id} style={{ left: hub.x, top: hub.y }}>
       <div className="node-label">
         <span className="node-label-dot" />
         mixer
       </div>
 
-      <div className="node-card" ref={cardRef} onMouseMove={onMove}>
+      <div className="node-card" ref={cardRef} onMouseMove={onGlowMove}>
         <div className="node-glow" aria-hidden />
+
+        {actions && (
+          <NodeToolbar
+            onDuplicate={() => onDuplicate?.(hub.id)}
+            onDelete={() => onDelete?.(hub.id)}
+          />
+        )}
 
         <span className="node-port hub-port-out" data-node={hub.id} data-side="out" data-port="" />
 
@@ -56,7 +84,11 @@ export function HubNode({ hub, search }: { hub: HubModel; search?: 'match' | 'di
             <HubGlyph />
           </div>
           <div className="node-titles">
-            <div className="node-name">{hub.name}</div>
+            <EditableName
+              className="node-name"
+              value={hub.name}
+              onRename={onRename ? (name) => onRename(hub.id, name) : undefined}
+            />
             <div className="node-sub">{hub.subtitle}</div>
           </div>
         </div>
@@ -72,17 +104,33 @@ export function HubNode({ hub, search }: { hub: HubModel; search?: 'match' | 'di
                 data-port={inp.id}
               />
               <span className="hub-in-name">{inp.label}</span>
-              <input
-                className="node-slider hub-slider"
-                type="range"
-                min={0}
-                max={100}
-                defaultValue={Math.round((inp.volume ?? 0) * 100)}
-                aria-label={`${inp.label} level`}
+              <VolumeSlider
+                className="hub-slider"
+                defaultValue={inp.volume ?? 0}
+                ariaLabel={`${inp.label} level`}
               />
-              <span className="hub-in-pct">{Math.round((inp.volume ?? 0) * 100)}%</span>
+              <button
+                className="hub-in-x"
+                aria-label={`remove ${inp.label}`}
+                title="remove input"
+                onClick={() => onRemoveInput?.(hub.id, inp.id)}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           ))}
+
+          {/* Always-present "ghost" input: drag a source's output here to add one. */}
+          <div className="hub-in-row hub-add-row">
+            <span className="node-port hub-port-add" data-node={hub.id} data-side="in" data-add="1">
+              <svg className="hub-add-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
+                <path d="M12 6v12M6 12h12" />
+              </svg>
+            </span>
+            <span className="hub-add-hint">drag a source here</span>
+          </div>
         </div>
 
         <div className="hub-out">

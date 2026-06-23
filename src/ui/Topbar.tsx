@@ -1,16 +1,54 @@
+import { useEffect, useRef, useState } from 'react';
 import './Topbar.css';
 
 /**
- * Topbar — the single persistent chrome bar (R10).
+ * Topbar — the single persistent chrome bar (R10 + R22 multi-scene).
  *
  * Left: compact NODUS mark + wordmark. Center: scene navigator
- * (‹ Scene name × ›) as in the Claude-design reference. Right: a "⋯" menu
- * (Settings / Import / Export).
- *
- * The engine control lives ONLY on the floating center pill (EngineButton) —
- * no Start/Live in the topbar.
+ * (‹ Scene name × › +) — arrows cycle scenes, the pill shows the active one
+ * (double-click to rename), × closes it, + adds a scene. Right: a "⋯" menu.
  */
-export function Topbar() {
+export function Topbar({
+  scenes = [{ id: 'scene-1', name: 'Scene 1' }],
+  activeId = 'scene-1',
+  onSwitch,
+  onAdd,
+  onClose,
+  onRename,
+}: {
+  scenes?: { id: string; name: string }[];
+  activeId?: string;
+  onSwitch?: (id: string) => void;
+  onAdd?: () => void;
+  onClose?: (id: string) => void;
+  onRename?: (id: string, name: string) => void;
+}) {
+  const idx = Math.max(0, scenes.findIndex((s) => s.id === activeId));
+  const active = scenes[idx] ?? scenes[0];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(active.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      setDraft(active.name);
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  const commit = () => {
+    const name = draft.trim();
+    if (name && name !== active.name) onRename?.(active.id, name);
+    setEditing(false);
+  };
+
+  const go = (delta: number) => {
+    const next = scenes[idx + delta];
+    if (next) onSwitch?.(next.id);
+  };
+
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -19,18 +57,53 @@ export function Topbar() {
       </div>
 
       <nav className="scene-nav" aria-label="scenes">
-        <button className="scene-arrow" aria-label="previous scene">
+        <button
+          className="scene-add scene-remove"
+          aria-label="delete scene"
+          title="delete scene"
+          disabled={scenes.length <= 1}
+          onClick={() => onClose?.(active.id)}
+        >
+          <Minus />
+        </button>
+        <button
+          className="scene-arrow"
+          aria-label="previous scene"
+          disabled={idx <= 0}
+          onClick={() => go(-1)}
+        >
           <ChevronLeft />
         </button>
         <div className="scene-pill">
           <span className="scene-dot" />
-          <span className="scene-name">Scene 1</span>
-          <button className="scene-close" aria-label="close scene">
-            <Cross />
-          </button>
+          {editing ? (
+            <input
+              ref={inputRef}
+              className="scene-name-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commit();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+            />
+          ) : (
+            <span className="scene-name" onDoubleClick={() => setEditing(true)} title="double-click to rename">
+              {active.name}
+            </span>
+          )}
         </div>
-        <button className="scene-arrow" aria-label="next scene">
+        <button
+          className="scene-arrow"
+          aria-label="next scene"
+          disabled={idx >= scenes.length - 1}
+          onClick={() => go(1)}
+        >
           <ChevronRight />
+        </button>
+        <button className="scene-add" aria-label="new scene" title="new scene" onClick={() => onAdd?.()}>
+          <Plus />
         </button>
       </nav>
 
@@ -61,10 +134,17 @@ function ChevronRight() {
     </svg>
   );
 }
-function Cross() {
+function Plus() {
   return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-      <path d="M18 6 6 18M6 6l12 12" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+function Minus() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14" />
     </svg>
   );
 }

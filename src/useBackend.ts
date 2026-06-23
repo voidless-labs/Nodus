@@ -26,10 +26,16 @@ const SAMPLE_DEVICES: AudioDevice[] = [
   { id: 'dev-spk', name: 'Speakers (Realtek)', device_type: 'output', is_default: false },
   { id: 'dev-mic', name: 'Microphone (Blue Yeti)', device_type: 'input', is_default: true },
   { id: 'dev-nodusmic', name: 'Nodus Mic', device_type: 'virtual', is_default: false },
+  { id: 'dev-cable', name: 'CABLE Input', device_type: 'virtual', is_default: false, original_name: 'VB-Audio Virtual Cable' },
 ];
 
+// A crisp SVG so the icon path is visible in the browser preview (no Tauri).
+// Real icons come from the backend as extracted PNGs.
+const SAMPLE_ICON =
+  "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Crect%20width='24'%20height='24'%20rx='6'%20fill='%231DB954'/%3E%3Ccircle%20cx='12'%20cy='12'%20r='4.5'%20fill='%23fff'/%3E%3C/svg%3E";
+
 const SAMPLE_PROCESSES: AudioProcess[] = [
-  { exe_name: 'spotify.exe', pid: 1001, display_name: 'Spotify', source_type: 'music' },
+  { exe_name: 'spotify.exe', pid: 1001, display_name: 'Spotify', source_type: 'music', icon: SAMPLE_ICON },
   { exe_name: 'discord.exe', pid: 1002, display_name: 'Discord', source_type: 'voice' },
   { exe_name: 'chrome.exe', pid: 1003, display_name: 'Chrome', source_type: 'browser' },
 ];
@@ -42,7 +48,9 @@ export interface Backend {
   /** Live per-source levels, keyed by device id or exe name (0..1). */
   levels: VolumeLevels;
   live: boolean;
-  setLive: (on: boolean) => void;
+  /** Turn the engine on/off. `onStarted` runs once the engine has started
+   *  (used to push the current routing graph). No-op argument in the browser. */
+  setLive: (on: boolean, onStarted?: () => void) => void;
 }
 
 export function useBackend(): Backend {
@@ -86,11 +94,18 @@ export function useBackend(): Backend {
     };
   }, []);
 
-  const setLive = useCallback((on: boolean) => {
+  const setLive = useCallback((on: boolean, onStarted?: () => void) => {
     setLiveState(on);
     if (!isTauri) return;
-    void (on ? startEngine() : stopEngine());
-    if (!on) setLevels({});
+    if (on) {
+      // Start the engine, then push the current routing graph (proven order).
+      startEngine()
+        .then(() => onStarted?.())
+        .catch((e) => console.error('start_engine:', e));
+    } else {
+      void stopEngine().catch((e) => console.error('stop_engine:', e));
+      setLevels({});
+    }
   }, []);
 
   return { ready, tauri: isTauri, devices, processes, levels, live, setLive };

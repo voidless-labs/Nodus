@@ -268,6 +268,7 @@ mod tests {
             pid: 1234,
             display_name: "Arma 3".into(),
             source_type: SourceType::Game,
+            icon: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("arma3_x64.exe"));

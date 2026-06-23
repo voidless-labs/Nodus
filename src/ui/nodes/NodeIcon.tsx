@@ -8,10 +8,22 @@ import type { NodeModel } from './types';
  * component boundary stays the same so the swap is local.
  */
 export function NodeIcon({ node }: { node: NodeModel }) {
+  // Real extracted app icon wins; otherwise a kind glyph / letter fallback.
+  if (node.icon) {
+    return (
+      <div className="node-icon node-icon--img">
+        <img className="node-icon-img" src={node.icon} alt="" draggable={false} />
+      </div>
+    );
+  }
+
   let glyph: JSX.Element;
   if (node.kind === 'output') glyph = <GlyphHeadphones />;
   else if (node.kind === 'virtual') glyph = node.micSink ? <GlyphMic /> : <GlyphSpeaker />;
   else if (node.kind === 'hub') glyph = <GlyphHub />;
+  else if (node.kind === 'splitter') glyph = <GlyphSplitter />;
+  else if (node.kind === 'fx') glyph = <GlyphFx />;
+  else if (node.kind === 'logic') glyph = <GlyphLogic />;
   else if (node.avatar) glyph = <span className="node-icon-letter">{node.avatar}</span>;
   else glyph = <GlyphMic />;
 
@@ -53,6 +65,32 @@ function GlyphHub() {
       <line x1="4" y1="7" x2="20" y2="7" />
       <line x1="4" y1="12" x2="20" y2="12" />
       <line x1="4" y1="17" x2="14" y2="17" />
+    </svg>
+  );
+}
+
+function GlyphSplitter() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12h6M10 12l8-5M10 12l8 5" />
+      <circle cx="19" cy="7" r="1.6" />
+      <circle cx="19" cy="17" r="1.6" />
+    </svg>
+  );
+}
+
+function GlyphFx() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12h3l3-7 6 14 3-7h3" />
+    </svg>
+  );
+}
+
+function GlyphLogic() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
     </svg>
   );
 }
