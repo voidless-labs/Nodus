@@ -1,0 +1,116 @@
+/* FlyoutApp.css — the tray flyout window (t13). A slice of the real app:
+   topbar surface + canvas graphite, not the BottomBar accent gradient. */
+
+.flyout {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
+  /* rounded corners (same radius as a node card); the window is transparent so
+     the corners outside the radius read as transparent, not black. */
+  border-radius: var(--radius-node);
+  border: 1px solid var(--color-border-2);
+  overflow: hidden;
+}
+
+/* "Pin open" — top-right. Keeps the flyout from auto-hiding (and lets you drag
+   it by the topbar). Floats above the topbar; not a drag region itself. */
+.flyout-pin {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.flyout-pin:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+.flyout-pin.is-on {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+/* The flyout body reads like the canvas: graphite + faint dot grid. The
+   EngineButton (position:absolute) floats at the top-centre, anchored here. */
+.flyout-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-image: radial-gradient(var(--color-dot) 1px, transparent 1px);
+  background-size: var(--dot-grid-step) var(--dot-grid-step);
+}
+
+.flyout-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* top padding clears the floating engine pill */
+  padding: 62px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* Footer: small Dashboard button (left) + engine uptime (right). */
+.flyout-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 12px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+/* "Dashboard" — reveals the full app window. Small icon button, bottom-left. */
+.flyout-dash {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.flyout-dash:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-muted);
+  background: var(--color-panel-2);
+}
+/* Engine uptime, bottom-right. */
+.flyout-uptime {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+}
+.flyout-uptime.is-live {
+  color: var(--color-text-secondary);
+}
+.flyout-uptime-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-engine-fill);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}

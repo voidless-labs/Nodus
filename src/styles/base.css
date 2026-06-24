@@ -39,6 +39,23 @@ body {
   min-height: 0;
 }
 
+/* Drag ghost: the floating chip that follows the cursor while dragging a
+   palette item onto the canvas (pointer-based placement). */
+.place-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  padding: 6px 11px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  background: var(--color-panel-2, #161619);
+  border: 1px solid var(--color-accent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
 /* Temporary scaffold marker (removed in R10 when the topbar lands). */
 .scaffold-note {
   position: absolute;

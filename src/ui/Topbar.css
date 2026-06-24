@@ -100,6 +100,11 @@
   color: #f0a0a0;
   background: rgba(127, 46, 46, 0.16);
 }
+/* "+" new scene — soft green, mirroring the red "−" without grabbing attention. */
+.scene-add:not(.scene-remove):hover:not(:disabled) {
+  color: #a6d8a0;
+  background: rgba(58, 110, 58, 0.16);
+}
 .scene-pill {
   display: flex;
   align-items: center;
@@ -122,6 +127,7 @@
   font-weight: 500;
   letter-spacing: 0.01em;
   cursor: text;
+  white-space: nowrap;
 }
 .scene-name-input {
   width: 92px;
@@ -152,26 +158,35 @@
   background: rgba(255, 255, 255, 0.09);
 }
 
-/* ── Right: menu ──────────────────────────────────────────────── */
+/* ── Right: window controls (custom title bar) ────────────────── */
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
   justify-self: end;
 }
-.topbar-menu {
-  width: 32px;
-  height: 32px;
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.win-btn {
+  width: 40px;
+  height: 30px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 7px;
   border: none;
   background: transparent;
   color: var(--color-text-dim);
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
-.topbar-menu:hover {
+.win-btn:hover {
   color: var(--color-text-primary);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.06);
+}
+.win-close:hover {
+  color: #fff;
+  background: #d04545;
 }

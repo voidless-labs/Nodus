@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { winMinimize, winToggleMaximize, winHide, winIsMaximized, onWinResize } from '../bridge';
 import './Topbar.css';
 
 /**
@@ -15,6 +16,8 @@ export function Topbar({
   onAdd,
   onClose,
   onRename,
+  windowControls = true,
+  sceneEditing = true,
 }: {
   scenes?: { id: string; name: string }[];
   activeId?: string;
@@ -22,6 +25,11 @@ export function Topbar({
   onAdd?: () => void;
   onClose?: (id: string) => void;
   onRename?: (id: string, name: string) => void;
+  /** Show the min/max/close window buttons (off in the tray flyout). */
+  windowControls?: boolean;
+  /** Show the add (+) / delete (−) scene buttons (off in the flyout — there you
+   *  can only switch scenes; add/delete live in the main UI). */
+  sceneEditing?: boolean;
 }) {
   const idx = Math.max(0, scenes.findIndex((s) => s.id === activeId));
   const active = scenes[idx] ?? scenes[0];
@@ -50,22 +58,24 @@ export function Topbar({
   };
 
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <span className="brand-mark" aria-hidden />
-        <span className="brand-name">nodus</span>
+    <header className="topbar" data-tauri-drag-region>
+      <div className="topbar-left" data-tauri-drag-region>
+        <span className="brand-mark" aria-hidden data-tauri-drag-region />
+        <span className="brand-name" data-tauri-drag-region>nodus</span>
       </div>
 
       <nav className="scene-nav" aria-label="scenes">
-        <button
-          className="scene-add scene-remove"
-          aria-label="delete scene"
-          title="delete scene"
-          disabled={scenes.length <= 1}
-          onClick={() => onClose?.(active.id)}
-        >
-          <Minus />
-        </button>
+        {sceneEditing && (
+          <button
+            className="scene-add scene-remove"
+            aria-label="delete scene"
+            title="delete scene"
+            disabled={scenes.length <= 1}
+            onClick={() => onClose?.(active.id)}
+          >
+            <Minus />
+          </button>
+        )}
         <button
           className="scene-arrow"
           aria-label="previous scene"
@@ -102,21 +112,81 @@ export function Topbar({
         >
           <ChevronRight />
         </button>
-        <button className="scene-add" aria-label="new scene" title="new scene" onClick={() => onAdd?.()}>
-          <Plus />
-        </button>
+        {sceneEditing && (
+          <button className="scene-add" aria-label="new scene" title="new scene" onClick={() => onAdd?.()}>
+            <Plus />
+          </button>
+        )}
       </nav>
 
-      <div className="topbar-right">
-        <button className="topbar-menu" aria-label="menu">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="5" cy="12" r="1.6" />
-            <circle cx="12" cy="12" r="1.6" />
-            <circle cx="19" cy="12" r="1.6" />
-          </svg>
-        </button>
-      </div>
+      <div className="topbar-right">{windowControls && <WindowControls />}</div>
     </header>
+  );
+}
+
+/**
+ * WindowControls — custom title-bar buttons (replaces the native Windows
+ * caption now that the window is frameless: tauri.conf decorations=false).
+ * Minimize · Maximize/Restore · Close. No-ops in the browser preview.
+ */
+function WindowControls() {
+  const [maxed, setMaxed] = useState(false);
+
+  useEffect(() => {
+    let unlisten = () => {};
+    let alive = true;
+    const sync = () => winIsMaximized().then((m) => alive && setMaxed(m));
+    sync();
+    onWinResize(sync).then((fn) => {
+      if (alive) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      alive = false;
+      unlisten();
+    };
+  }, []);
+
+  return (
+    <div className="win-controls">
+      <button
+        className="win-btn"
+        aria-label="Свернуть окно"
+        title="Свернуть окно"
+        onClick={() => winMinimize()}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+          <path d="M3.5 8h9" />
+        </svg>
+      </button>
+      <button
+        className="win-btn"
+        aria-label={maxed ? 'Восстановить окно' : 'Развернуть окно'}
+        title={maxed ? 'Восстановить окно' : 'Развернуть окно'}
+        onClick={() => winToggleMaximize()}
+      >
+        {maxed ? (
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+            <rect x="4.5" y="4.5" width="7" height="7" rx="1" />
+            <path d="M6 4.5V3.5A1 1 0 0 1 7 2.5h5A1 1 0 0 1 13 3.5v5a1 1 0 0 1-1 1h-1" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+            <rect x="3.5" y="3.5" width="9" height="9" rx="1" />
+          </svg>
+        )}
+      </button>
+      <button
+        className="win-btn win-close"
+        aria-label="Свернуть в трей"
+        title="Свернуть в трей (выход — из меню трея)"
+        onClick={() => winHide()}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
+      </button>
+    </div>
   );
 }
 

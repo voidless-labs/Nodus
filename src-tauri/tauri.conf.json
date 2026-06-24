@@ -17,6 +17,18 @@
       "shell": {
         "all": false,
         "open": true
+      },
+      "window": {
+        "all": false,
+        "minimize": true,
+        "unminimize": true,
+        "maximize": true,
+        "unmaximize": true,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "setFocus": true,
+        "startDragging": true
       }
     },
     "bundle": {
@@ -34,15 +46,37 @@
     "security": {
       "csp": null
     },
+    "systemTray": {
+      "iconPath": "icons/tray.ico",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false
+    },
     "windows": [
       {
+        "label": "main",
         "fullscreen": false,
         "resizable": true,
+        "decorations": false,
         "title": "Nodus",
         "width": 1400,
         "height": 900,
         "minWidth": 900,
         "minHeight": 600,
+        "fileDropEnabled": false
+      },
+      {
+        "label": "quick",
+        "url": "index.html?w=quick",
+        "title": "Nodus Quick Controls",
+        "width": 360,
+        "height": 612,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "focus": false,
         "fileDropEnabled": false
       }
     ]

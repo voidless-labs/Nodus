@@ -62,7 +62,12 @@ export function Graph({
   onEdgePan,
   onRemoveEdge,
   onRemoveHubInput,
+  onHubInputVolume,
   onConnectNewInput,
+  onConnectNewOutput,
+  onConnectNewBoth,
+  pinned,
+  onPin,
 }: {
   nodes: NodeModel[];
   edges: EdgeModel[];
@@ -86,7 +91,7 @@ export function Graph({
   onNodeDelete?: (id: string) => void;
   onNodeRename?: (id: string, name: string) => void;
   /** Drag-connect: a wire dragged from an output port onto an input port. */
-  onConnect?: (from: string, to: string, toPort?: string) => void;
+  onConnect?: (from: string, to: string, toPort?: string, fromPort?: string) => void;
   /** Edge popover (R9): per-route volume / mute / balance / delete. */
   onEdgeVolume?: (id: string, volume: number) => void;
   onEdgeMute?: (id: string, muted: boolean) => void;
@@ -94,8 +99,17 @@ export function Graph({
   onRemoveEdge?: (id: string) => void;
   /** Dynamic hub ports (R24). */
   onRemoveHubInput?: (hubId: string, inputId: string) => void;
-  /** Drop a wire on a hub's ghost port → create a new input + connect. */
-  onConnectNewInput?: (fromNode: string, hubId: string) => void;
+  /** Live hub-input slider → feeding route trim (R18). */
+  onHubInputVolume?: (hubId: string, inputId: string, volume: number) => void;
+  /** Drop a wire on a mixer ghost in-port → new input + connect (fromPort = splitter output). */
+  onConnectNewInput?: (fromNode: string, hubId: string, fromPort?: string) => void;
+  /** Drag from a splitter ghost out-port to a target → new output + connect. */
+  onConnectNewOutput?: (splitterId: string, toNode: string, toPort?: string) => void;
+  /** Splitter ghost-out dropped on a mixer ghost-in → new output + input + edge. */
+  onConnectNewBoth?: (splitterId: string, mixerId: string) => void;
+  /** Pinned node/hub ids + toggle (t13 quick-controls). */
+  pinned?: Set<string>;
+  onPin?: (id: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [ports, setPorts] = useState<PortMap>({});
@@ -107,7 +121,10 @@ export function Graph({
     x2: number;
     y2: number;
   } | null>(null);
-  const dragFrom = useRef<string | null>(null);
+  // The output port a wire is being dragged from: node id, its port id ('' for a
+  // node's single output / a splitter output id), and whether it's the splitter
+  // ghost "+" (a request to make a new output).
+  const dragFrom = useRef<{ node: string; port?: string; add?: boolean } | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [panning, setPanning] = useState(false);
   // Rubber-band selection rectangle (screen-local px); null = not marqueeing.
@@ -304,13 +321,17 @@ export function Graph({
     }
     if (e.button !== 0) return;
 
-    // Output port → start a wire.
+    // Output port (incl. the splitter ghost "+") → start a wire.
     const port = target.closest<HTMLElement>('.node-port');
     if (port && port.dataset.side === 'out' && port.dataset.node) {
       e.preventDefault();
       const r = port.getBoundingClientRect();
       const start = screenToWorld(r.left + r.width / 2, r.top + r.height / 2);
-      dragFrom.current = port.dataset.node;
+      dragFrom.current = {
+        node: port.dataset.node,
+        port: port.dataset.port || '',
+        add: !!port.dataset.add,
+      };
       setDrag({ from: port.dataset.node, x1: start.x, y1: start.y, x2: start.x, y2: start.y });
       return;
     }
@@ -367,8 +388,13 @@ export function Graph({
       const port = el?.closest<HTMLElement>('.node-port');
       const from = dragFrom.current;
       if (from && port && port.dataset.side === 'in' && port.dataset.node) {
-        if (port.dataset.add) onConnectNewInput?.(from, port.dataset.node);
-        else onConnect?.(from, port.dataset.node, port.dataset.port || undefined);
+        const toNode = port.dataset.node;
+        const toAdd = !!port.dataset.add; // mixer ghost in-port
+        const toPort = port.dataset.port || undefined;
+        if (from.add && toAdd) onConnectNewBoth?.(from.node, toNode); // splitter+ → mixer+
+        else if (toAdd) onConnectNewInput?.(from.node, toNode, from.port); // → mixer +
+        else if (from.add) onConnectNewOutput?.(from.node, toNode, toPort); // splitter + →
+        else onConnect?.(from.node, toNode, toPort, from.port); // plain wire
       }
       dragFrom.current = null;
       setDrag(null);
@@ -380,7 +406,7 @@ export function Graph({
       window.removeEventListener('mouseup', onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging, onConnect, onConnectNewInput]);
+  }, [dragging, onConnect, onConnectNewInput, onConnectNewOutput, onConnectNewBoth]);
 
   const worldTransform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
   // The lone selected node gets the action toolbar (R20). 2+ → SelectionBar.
@@ -388,7 +414,7 @@ export function Graph({
 
   // Selected wire midpoint, projected world→screen for the (unscaled) popover.
   const selected = selectedEdge ? edges.find((x) => x.id === selectedEdge) : undefined;
-  const selA = selected && ports[key(selected.from, 'out')];
+  const selA = selected && ports[key(selected.from, 'out', selected.fromPort ?? '')];
   const selB = selected && ports[key(selected.to, 'in', selected.toPort ?? '')];
 
   return (
@@ -396,7 +422,7 @@ export function Graph({
       <div className="graph-world" style={{ transform: worldTransform }}>
         <svg className="edge-layer" aria-hidden>
           {edges.map((e) => {
-            const a = ports[key(e.from, 'out')];
+            const a = ports[key(e.from, 'out', e.fromPort ?? '')];
             const b = ports[key(e.to, 'in', e.toPort ?? '')];
             if (!a || !b) return null;
             const cls = [
@@ -435,9 +461,12 @@ export function Graph({
             search={searchFor(h.name, search)}
             actions={h.id === soleSelected}
             onRemoveInput={onRemoveHubInput}
+            onInputVolume={onHubInputVolume}
             onDuplicate={onNodeDuplicate}
             onDelete={onNodeDelete}
             onRename={onNodeRename}
+            onPin={onPin}
+            pinned={pinned?.has(h.id)}
           />
         ))}
         {nodes.map((n) => {
@@ -460,6 +489,8 @@ export function Graph({
               onDuplicate={onNodeDuplicate}
               onDelete={onNodeDelete}
               onRename={onNodeRename}
+              onPin={onPin}
+              pinned={pinned?.has(n.id)}
             />
           );
         })}

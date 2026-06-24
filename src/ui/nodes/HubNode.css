@@ -160,6 +160,47 @@
   box-shadow: 0 0 8px -1px var(--color-accent);
 }
 
+/* ── Splitter (mirror of the mixer): 1 input → N outputs ───────── */
+.node--splitter {
+  --type-color: var(--color-type-hub);
+}
+/* dynamic OUTPUT nubs ride the card's RIGHT edge, one per row */
+.node-port.hub-port-out-row {
+  position: absolute;
+  right: -27px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 9px;
+  height: 9px;
+  background: var(--color-type-output);
+  border: 2px solid var(--color-canvas);
+  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-output) 60%, transparent);
+}
+/* the ghost "add output" sits on the right, and you drag FROM it */
+.node-port.hub-port-add.hub-port-add-out {
+  left: auto;
+  right: -27px;
+}
+.node--splitter .hub-add-row:hover .hub-port-add {
+  border-color: var(--color-type-output);
+  border-style: solid;
+  color: var(--color-type-output);
+  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-output) 60%, transparent);
+}
+/* the single input nub on the left, vertically centred (mirror of mix-output) */
+.node-port.hub-port-in-single {
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-type-source);
+  border: 2px solid var(--color-canvas);
+  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
+}
+
 /* ── States ───────────────────────────────────────────────────── */
 .node--hub.is-active .node-card {
   box-shadow: var(--shadow-node), 0 0 20px -6px color-mix(in srgb, var(--color-type-hub) 45%, transparent);

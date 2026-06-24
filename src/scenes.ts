@@ -1,3 +1,4 @@
+import type { AudioDevice, AudioProcess } from './bridge';
 import type { EdgeModel, HubModel, NodeModel } from './ui/nodes/types';
 
 /** A canvas scene: leaf nodes, hub nodes and the edges between them. */
@@ -5,9 +6,11 @@ export interface Scene {
   nodes: NodeModel[];
   hubs: HubModel[];
   edges: EdgeModel[];
+  /** Ids of nodes/hubs pinned to the quick-controls popup (t13), per scene. */
+  pinned?: string[];
 }
 
-export const EMPTY_SCENE: Scene = { nodes: [], hubs: [], edges: [] };
+export const EMPTY_SCENE: Scene = { nodes: [], hubs: [], edges: [], pinned: [] };
 
 /** Preset ids offered on the empty canvas (R16). */
 export type PresetId = 'stream' | 'discord' | 'headphones';
@@ -86,4 +89,57 @@ export function buildPreset(id: PresetId): Scene {
     case 'headphones':
       return headphonesScene();
   }
+}
+
+/** Real devices/processes to bind a preset's placeholder nodes onto (R18). */
+export interface PresetBinding {
+  output?: AudioDevice;
+  input?: AudioDevice;
+  virtualMic?: AudioDevice;
+  processes?: AudioProcess[];
+}
+
+const subFor = (d: AudioDevice) => d.original_name ?? d.name;
+
+/**
+ * bindScene — map a preset's curated placeholder nodes onto the user's real
+ * hardware so the graph actually routes (R18):
+ * - output nodes → the default (or first) output device;
+ * - the mic source (a source with no app avatar) → the default input device;
+ * - the Nodus virtual-mic sink → the user's own Nodus virtual device;
+ * - app sources (with an avatar) → a running process matched by name; if the
+ *   app isn't running the node stays a friendly placeholder to rebind later.
+ * The curated display name is kept; the real binding rides on
+ * deviceId/exeName/icon (+ a subtitle showing what it bound to). Pure.
+ */
+export function bindScene(scene: Scene, b: PresetBinding): Scene {
+  const matchProc = (name: string): AudioProcess | undefined => {
+    const key = name.toLowerCase();
+    return (b.processes ?? []).find(
+      (p) =>
+        p.display_name.toLowerCase().includes(key) || p.exe_name.toLowerCase().includes(key),
+    );
+  };
+
+  const nodes = scene.nodes.map((n): NodeModel => {
+    if (n.kind === 'output' && b.output) {
+      return { ...n, deviceId: b.output.id, subtitle: subFor(b.output) };
+    }
+    if (n.kind === 'virtual' && n.micSink && b.virtualMic) {
+      return { ...n, deviceId: b.virtualMic.id, subtitle: subFor(b.virtualMic) };
+    }
+    if (n.kind === 'source') {
+      if (n.avatar) {
+        const p = matchProc(n.name);
+        return p
+          ? { ...n, exeName: p.exe_name, icon: p.icon ?? n.icon, subtitle: `${p.source_type} · app` }
+          : n; // app not running → keep placeholder
+      }
+      // mic-like source (no avatar) → bind to the input device
+      if (b.input) return { ...n, deviceId: b.input.id, subtitle: subFor(b.input) };
+    }
+    return n;
+  });
+
+  return { ...scene, nodes };
 }

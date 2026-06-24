@@ -69,6 +69,7 @@ export function AddPanel({
   processes,
   onAddDevice,
   onAddProcess,
+  onBeginPlace,
 }: {
   nodes: number;
   routes: number;
@@ -76,6 +77,13 @@ export function AddPanel({
   processes: AudioProcess[];
   onAddDevice?: (d: AudioDevice) => void;
   onAddProcess?: (p: AudioProcess) => void;
+  /** Begin a pointer-based drag of this item onto the canvas (WebView2-safe). */
+  onBeginPlace?: (
+    e: React.PointerEvent,
+    payload: { kind: 'device' | 'process'; id: string },
+    label: string,
+    onTap: () => void,
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -86,26 +94,24 @@ export function AddPanel({
     return [f(processes.map(processToItem)), f(rawDevices.map(deviceToItem))];
   }, [q, processes, rawDevices]);
 
-  const pick = (item: AddItem) => {
+  // Add the item to the canvas (used for a tap / keyboard activate).
+  const addItem = (item: AddItem) => {
     if (item.device) onAddDevice?.(item.device);
     else if (item.process) onAddProcess?.(item.process);
-    setOpen(false);
-    setQ('');
   };
 
-  // Drag a row onto the canvas to place the node exactly where you drop it.
-  // Close the panel so the canvas becomes the drop target (the drag image is
-  // already captured by the browser, so it survives the unmount).
-  const onRowDragStart = (e: React.DragEvent, item: AddItem) => {
+  // Press on a row → start a pointer-drag (move to place, tap to quick-add).
+  // The panel closes immediately; window-level listeners drive the rest.
+  const startPlace = (e: React.PointerEvent, item: AddItem) => {
     const payload = item.device
-      ? { kind: 'device', id: item.device.id }
+      ? ({ kind: 'device', id: item.device.id } as const)
       : item.process
-        ? { kind: 'process', id: item.process.exe_name }
+        ? ({ kind: 'process', id: item.process.exe_name } as const)
         : null;
     if (!payload) return;
-    e.dataTransfer.setData('application/nodus-add', JSON.stringify(payload));
-    e.dataTransfer.effectAllowed = 'copy';
+    onBeginPlace?.(e, payload, item.name, () => addItem(item));
     setOpen(false);
+    setQ('');
   };
 
   return (
@@ -132,8 +138,12 @@ export function AddPanel({
                     <AddRow
                       key={it.id}
                       item={it}
-                      onClick={() => pick(it)}
-                      onDragStart={(e) => onRowDragStart(e, it)}
+                      onPointerDown={(e) => startPlace(e, it)}
+                      onActivate={() => {
+                        addItem(it);
+                        setOpen(false);
+                        setQ('');
+                      }}
                     />
                   ))}
                 </div>
@@ -145,8 +155,12 @@ export function AddPanel({
                     <AddRow
                       key={it.id}
                       item={it}
-                      onClick={() => pick(it)}
-                      onDragStart={(e) => onRowDragStart(e, it)}
+                      onPointerDown={(e) => startPlace(e, it)}
+                      onActivate={() => {
+                        addItem(it);
+                        setOpen(false);
+                        setQ('');
+                      }}
                     />
                   ))}
                 </div>
@@ -179,19 +193,27 @@ export function AddPanel({
 
 function AddRow({
   item,
-  onClick,
-  onDragStart,
+  onPointerDown,
+  onActivate,
 }: {
   item: AddItem;
-  onClick: () => void;
-  onDragStart: (e: React.DragEvent) => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onActivate: () => void;
 }) {
   return (
-    <button
+    // Pointer-based drag (not native HTML5 draggable): a press starts a
+    // candidate drag, movement places on the canvas, a tap quick-adds.
+    <div
       className="ap-row"
-      draggable
-      onClick={onClick}
-      onDragStart={onDragStart}
+      role="button"
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
       style={{ ['--c' as string]: `var(--color-type-${item.color})` }}
     >
       <span className="ap-row-icon">
@@ -206,7 +228,7 @@ function AddRow({
         <span className="ap-row-sub">{item.sub}</span>
       </span>
       <span className="ap-row-add">+</span>
-    </button>
+    </div>
   );
 }
 

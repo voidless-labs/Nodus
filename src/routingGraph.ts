@@ -64,7 +64,7 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
   for (const h of hubs) {
     backendNodes.push({
       id: h.id,
-      node_type: 'mixer',
+      node_type: h.role === 'splitter' ? 'splitter' : 'mixer',
       label: h.name,
       device_id: '',
       exe_name: null,

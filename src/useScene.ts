@@ -55,7 +55,8 @@ function deviceNode(d: AudioDevice, scene: Scene, pos?: Pos): NodeModel {
     kind: isInput ? 'source' : isVirtual ? 'virtual' : 'output',
     micSink: micSink || undefined,
     name: d.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || d.name,
-    subtitle: d.original_name ?? d.device_type,
+    // Real device name like AddPanel: original_name, else the "(…)" suffix, else type.
+    subtitle: d.original_name ?? d.name.match(/\(([^)]*)\)\s*$/)?.[1] ?? d.device_type,
     deviceId: d.id,
     level: 0,
     volume: 1,
@@ -95,7 +96,6 @@ type CatalogSpec = {
 const CATALOG: Record<string, CatalogSpec> = {
   source: { kind: 'source', name: 'Source', subtitle: 'unbound', hasInput: false, hasOutput: true },
   output: { kind: 'output', name: 'Output', subtitle: 'unbound', hasInput: true, hasOutput: false },
-  splitter: { kind: 'splitter', name: 'Splitter', subtitle: '1 → many', hasInput: true, hasOutput: true },
   virtual: { kind: 'virtual', name: 'Virtual', subtitle: 'Nodus device', hasInput: true, hasOutput: false },
   gate: { kind: 'fx', name: 'Noise Gate', subtitle: 'effect', hasInput: true, hasOutput: true },
   comp: { kind: 'fx', name: 'Compressor', subtitle: 'effect', hasInput: true, hasOutput: true },
@@ -112,12 +112,25 @@ function nodeFromType(typeId: string, pos: Pos): { node?: NodeModel; hub?: HubMo
     return {
       hub: {
         id: nid('h'),
+        role: 'mixer',
         name: 'Mixer',
         subtitle: 'routing engine',
-        inputs: [
-          { id: nid('in'), label: 'in 1', volume: 1 },
-          { id: nid('in'), label: 'in 2', volume: 1 },
-        ],
+        inputs: [], // inputs are grown via the ghost in-port (mirror of splitter)
+        level: 0,
+        active: true,
+        ...pos,
+      },
+    };
+  }
+  if (typeId === 'splitter') {
+    // Mirror of the mixer: 1 input → N outputs (pulled from the ghost "+").
+    return {
+      hub: {
+        id: nid('h'),
+        role: 'splitter',
+        name: 'Splitter',
+        subtitle: '1 → many',
+        inputs: [], // outputs, grown via the ghost out-port
         level: 0,
         active: true,
         ...pos,
@@ -140,6 +153,21 @@ function nodeFromType(typeId: string, pos: Pos): { node?: NodeModel; hub?: HubMo
       ...pos,
     },
   };
+}
+
+/** Drop hub ports (mixer inputs / splitter outputs) whose wire is gone — e.g. the
+ *  node on the other end was deleted. Each hub port exists iff it has an edge. */
+function pruneHubs(hubs: HubModel[], edges: EdgeModel[]): HubModel[] {
+  return hubs.map((h) => {
+    const kept = h.inputs.filter((p) =>
+      edges.some(
+        (e) =>
+          (e.to === h.id && (e.toPort ?? '') === p.id) ||
+          (e.from === h.id && (e.fromPort ?? '') === p.id),
+      ),
+    );
+    return kept.length === h.inputs.length ? h : { ...h, inputs: kept };
+  });
 }
 
 export interface SceneStore {
@@ -179,7 +207,7 @@ export interface SceneStore {
   toggleNodeSolo: (id: string) => void;
   addEdge: (edge: EdgeModel) => void;
   /** Connect two nodes by dragging a wire (out port → in port). */
-  connect: (from: string, to: string, toPort?: string) => void;
+  connect: (from: string, to: string, toPort?: string, fromPort?: string) => void;
   removeEdge: (id: string) => void;
   setEdgeVolume: (id: string, volume: number) => void;
   setEdgeMute: (id: string, muted: boolean) => void;
@@ -187,8 +215,17 @@ export interface SceneStore {
   /** Add an input port to a hub / remove one (R24 dynamic ports). */
   addHubInput: (hubId: string) => void;
   removeHubInput: (hubId: string, inputId: string) => void;
-  /** Connect a source to a hub's "ghost" port → new input + edge (auto-grow). */
-  connectNewInput: (fromNode: string, hubId: string) => void;
+  /** Set a hub input's level (slider) → mirrors onto its feeding route + engine. */
+  setHubInputVolume: (hubId: string, inputId: string, volume: number) => void;
+  /** Ids pinned to the quick-controls popup (per scene) + toggle (t13). */
+  pinned: string[];
+  togglePin: (id: string) => void;
+  /** Mixer ghost-in: source → new mixer input + edge. `fromPort` = splitter output id. */
+  connectNewInput: (fromNode: string, hubId: string, fromPort?: string) => void;
+  /** Splitter ghost-out: new splitter output + edge to a target (mirror of input). */
+  connectNewOutput: (splitterId: string, toNode: string, toPort?: string) => void;
+  /** Splitter ghost-out → Mixer ghost-in: new output + new input + the edge. */
+  connectNewBoth: (splitterId: string, mixerId: string) => void;
   /** Push the current graph to the engine (called when the engine turns on). */
   applyNow: () => void;
 }
@@ -330,12 +367,16 @@ export function useScene(live: boolean): SceneStore {
 
   const removeNode = useCallback(
     (id: string) => {
-      setScene((s) => ({
-        ...s,
-        nodes: s.nodes.filter((n) => n.id !== id),
-        hubs: s.hubs.filter((h) => h.id !== id),
-        edges: s.edges.filter((e) => e.from !== id && e.to !== id),
-      }));
+      setScene((s) => {
+        const edges = s.edges.filter((e) => e.from !== id && e.to !== id);
+        return {
+          ...s,
+          nodes: s.nodes.filter((n) => n.id !== id),
+          hubs: pruneHubs(s.hubs.filter((h) => h.id !== id), edges),
+          edges,
+          pinned: (s.pinned ?? []).filter((p) => p !== id),
+        };
+      });
       applyLater();
     },
     [applyLater],
@@ -345,16 +386,28 @@ export function useScene(live: boolean): SceneStore {
     (ids: string[]) => {
       if (!ids.length) return;
       const set = new Set(ids);
-      setScene((s) => ({
-        ...s,
-        nodes: s.nodes.filter((n) => !set.has(n.id)),
-        hubs: s.hubs.filter((h) => !set.has(h.id)),
-        edges: s.edges.filter((e) => !set.has(e.from) && !set.has(e.to)),
-      }));
+      setScene((s) => {
+        const edges = s.edges.filter((e) => !set.has(e.from) && !set.has(e.to));
+        return {
+          ...s,
+          nodes: s.nodes.filter((n) => !set.has(n.id)),
+          hubs: pruneHubs(s.hubs.filter((h) => !set.has(h.id)), edges),
+          edges,
+          pinned: (s.pinned ?? []).filter((p) => !set.has(p)),
+        };
+      });
       applyLater();
     },
     [applyLater],
   );
+
+  // Pin / unpin a node or hub to the quick-controls popup (per scene).
+  const togglePin = useCallback((id: string) => {
+    setScene((s) => {
+      const cur = s.pinned ?? [];
+      return { ...s, pinned: cur.includes(id) ? cur.filter((p) => p !== id) : [...cur, id] };
+    });
+  }, []);
 
   const moveNode = useCallback(
     (id: string, x: number, y: number) =>
@@ -480,14 +533,16 @@ export function useScene(live: boolean): SceneStore {
   );
 
   const connect = useCallback(
-    (from: string, to: string, toPort?: string) => {
+    (from: string, to: string, toPort?: string, fromPort?: string) => {
       if (from === to) return;
       setScene((s) => {
-        const dup = s.edges.some(
-          (e) => e.from === from && e.to === to && (e.toPort ?? '') === (toPort ?? ''),
-        );
-        if (dup) return s;
-        const edge: EdgeModel = { id: nid('e'), from, to, toPort, volume: 1, active: true };
+        // Strict port model: each port carries at most ONE wire. Fan-out is only
+        // via a Splitter (its many out-ports), fan-in only via a Mixer (its many
+        // in-ports). So block a second wire on an already-used output or input.
+        const outBusy = s.edges.some((e) => e.from === from && (e.fromPort ?? '') === (fromPort ?? ''));
+        const inBusy = s.edges.some((e) => e.to === to && (e.toPort ?? '') === (toPort ?? ''));
+        if (outBusy || inBusy) return s;
+        const edge: EdgeModel = { id: nid('e'), from, to, toPort, fromPort, volume: 1, active: true };
         return { ...s, edges: [...s.edges, edge] };
       });
       applyLater();
@@ -496,10 +551,13 @@ export function useScene(live: boolean): SceneStore {
   );
   const removeEdge = useCallback(
     (id: string) => {
-      patchEdges((es) => es.filter((e) => e.id !== id));
+      setScene((s) => {
+        const edges = s.edges.filter((e) => e.id !== id);
+        return { ...s, edges, hubs: pruneHubs(s.hubs, edges) };
+      });
       applyLater();
     },
-    [patchEdges, applyLater],
+    [applyLater],
   );
 
   const setEdgeVolume = useCallback(
@@ -530,12 +588,25 @@ export function useScene(live: boolean): SceneStore {
   // ── Dynamic hub inputs (R24) ───────────────────────────────────────────
   // Auto-grow: dragging a source onto a hub's trailing "ghost" port materialises
   // a new input AND connects to it in one step (a fresh ghost then renders below).
+  const labelOf = (id: string): string => {
+    const s = sceneRef.current;
+    return (s.nodes.find((n) => n.id === id)?.name ?? s.hubs.find((h) => h.id === id)?.name ?? 'node')
+      .toLowerCase()
+      .slice(0, 10);
+  };
+  const portFree = (side: 'out' | 'in', node: string, port?: string): boolean =>
+    !sceneRef.current.edges.some((e) =>
+      side === 'out' ? e.from === node && (e.fromPort ?? '') === (port ?? '') : e.to === node && (e.toPort ?? '') === (port ?? ''),
+    );
+
+  // Mixer ghost-in: drag a source onto it → new input + edge. `fromPort` carries
+  // a splitter output id when the source is a splitter output.
   const connectNewInput = useCallback(
-    (fromNode: string, hubId: string) => {
+    (fromNode: string, hubId: string, fromPort?: string) => {
       if (fromNode === hubId) return;
+      if (!portFree('out', fromNode, fromPort)) return; // source out-port already used
       const inputId = nid('in');
-      const src = sceneRef.current.nodes.find((n) => n.id === fromNode);
-      const label = (src?.name ?? 'input').toLowerCase();
+      const label = labelOf(fromNode);
       setScene((s) => ({
         ...s,
         hubs: s.hubs.map((h) =>
@@ -543,12 +614,87 @@ export function useScene(live: boolean): SceneStore {
         ),
         edges: [
           ...s.edges,
-          { id: nid('e'), from: fromNode, to: hubId, toPort: inputId, volume: 1, active: true },
+          { id: nid('e'), from: fromNode, fromPort, to: hubId, toPort: inputId, volume: 1, active: true },
         ],
       }));
       applyLater();
     },
     [applyLater],
+  );
+
+  // Splitter ghost-out: drag from it to a target → new output + edge (mirror).
+  const connectNewOutput = useCallback(
+    (splitterId: string, toNode: string, toPort?: string) => {
+      if (splitterId === toNode) return;
+      if (!portFree('in', toNode, toPort)) return; // target in-port already used
+      const outputId = nid('out');
+      const label = labelOf(toNode);
+      setScene((s) => ({
+        ...s,
+        hubs: s.hubs.map((h) =>
+          h.id === splitterId ? { ...h, inputs: [...h.inputs, { id: outputId, label, volume: 1 }] } : h,
+        ),
+        edges: [
+          ...s.edges,
+          { id: nid('e'), from: splitterId, fromPort: outputId, to: toNode, toPort, volume: 1, active: true },
+        ],
+      }));
+      applyLater();
+    },
+    [applyLater],
+  );
+
+  // Splitter ghost-out → Mixer ghost-in: create both ports + the edge between.
+  const connectNewBoth = useCallback(
+    (splitterId: string, mixerId: string) => {
+      if (splitterId === mixerId) return;
+      const outputId = nid('out');
+      const inputId = nid('in');
+      setScene((s) => ({
+        ...s,
+        hubs: s.hubs.map((h) => {
+          if (h.id === splitterId)
+            return { ...h, inputs: [...h.inputs, { id: outputId, label: 'mix', volume: 1 }] };
+          if (h.id === mixerId)
+            return { ...h, inputs: [...h.inputs, { id: inputId, label: 'split', volume: 1 }] };
+          return h;
+        }),
+        edges: [
+          ...s.edges,
+          { id: nid('e'), from: splitterId, fromPort: outputId, to: mixerId, toPort: inputId, volume: 1, active: true },
+        ],
+      }));
+      applyLater();
+    },
+    [applyLater],
+  );
+
+  // Hub input slider = the trim of the single route feeding that input. Mirror it
+  // onto the input model AND the edge (to === hub, toPort === input), and push the
+  // per-route volume to the engine live (no graph re-apply needed).
+  const setHubInputVolume = useCallback(
+    (hubId: string, inputId: string, volume: number) => {
+      // The port id may be a mixer input (toPort) or a splitter output (fromPort).
+      const edge = sceneRef.current.edges.find(
+        (e) =>
+          (e.to === hubId && (e.toPort ?? '') === inputId) ||
+          (e.from === hubId && (e.fromPort ?? '') === inputId),
+      );
+      setScene((s) => ({
+        ...s,
+        hubs: s.hubs.map((h) =>
+          h.id === hubId
+            ? { ...h, inputs: h.inputs.map((i) => (i.id === inputId ? { ...i, volume } : i)) }
+            : h,
+        ),
+        edges: edge ? s.edges.map((e) => (e.id === edge.id ? { ...e, volume } : e)) : s.edges,
+      }));
+      if (edge && liveRef.current)
+        void bridgeSetRouteVolume(edge.id, volume).catch((err) =>
+          console.error('set_route_volume:', err),
+        );
+    },
+    [],
   );
 
   const addHubInput = useCallback((hubId: string) => {
@@ -568,9 +714,13 @@ export function useScene(live: boolean): SceneStore {
         hubs: s.hubs.map((h) =>
           h.id === hubId ? { ...h, inputs: h.inputs.filter((i) => i.id !== inputId) } : h,
         ),
-        edges: s.edges.filter((e) => !(e.to === hubId && (e.toPort ?? '') === inputId)),
+        edges: s.edges.filter(
+          (e) =>
+            !((e.to === hubId && (e.toPort ?? '') === inputId) ||
+              (e.from === hubId && (e.fromPort ?? '') === inputId)),
+        ),
       }));
-      applyLater(); // removing an input drops its route
+      applyLater(); // removing a port drops its route
     },
     [applyLater],
   );
@@ -613,7 +763,12 @@ export function useScene(live: boolean): SceneStore {
       setEdgePan,
       addHubInput,
       removeHubInput,
+      setHubInputVolume,
+      pinned: scene.pinned ?? [],
+      togglePin,
       connectNewInput,
+      connectNewOutput,
+      connectNewBoth,
       applyNow,
     }),
     [
@@ -649,7 +804,11 @@ export function useScene(live: boolean): SceneStore {
       setEdgePan,
       addHubInput,
       removeHubInput,
+      setHubInputVolume,
+      togglePin,
       connectNewInput,
+      connectNewOutput,
+      connectNewBoth,
       applyNow,
     ],
   );

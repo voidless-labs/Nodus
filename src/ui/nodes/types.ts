@@ -72,14 +72,20 @@ export interface NodeModel {
   compact?: boolean;
 }
 
-/** A hub ("Stream Mix") node — per-input volumes → one mixed output. */
+/** A hub node. Two mirror roles:
+ *  - 'mixer'    : N inputs (the `ports` list) → 1 output. (default)
+ *  - 'splitter' : 1 input → N outputs (the `ports` list).
+ *  `ports` holds the dynamic side (inputs for a mixer, outputs for a splitter);
+ *  each carries its own per-route volume (0..1). */
 export interface HubModel {
   id: string;
   name: string;
   subtitle: string;
-  /** Each connected input with its own level in the mix (0..1). */
+  /** Mixer (N→1) or Splitter (1→N). Defaults to 'mixer'. */
+  role?: 'mixer' | 'splitter';
+  /** The dynamic side: inputs (mixer) or outputs (splitter). */
   inputs: { id: string; label: string; volume: number }[];
-  /** Output mix level 0..1 (for the bottom meter). */
+  /** Mix / input level 0..1 (for the meter). */
   level: number;
   active?: boolean;
   selected?: boolean;
@@ -92,7 +98,9 @@ export interface EdgeModel {
   id: string;
   from: string; // source node id (output port)
   to: string; // target node id (input port)
-  /** Target a specific labeled input (hub nodes); default = the node's single input. */
+  /** Leave a specific labeled output (splitter); default = the node's single output. */
+  fromPort?: string;
+  /** Target a specific labeled input (mixer); default = the node's single input. */
   toPort?: string;
   /** Per-route trim gain 0..1 (default 1). This is the value sent to the engine. */
   volume?: number;

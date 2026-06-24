@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AudioDevice } from './bridge';
+import { emitEvent, listenAny, winShow, type AudioDevice } from './bridge';
 import { Canvas } from './ui/Canvas';
 import { Graph } from './ui/Graph';
 import { Topbar } from './ui/Topbar';
@@ -10,9 +10,12 @@ import { AddPanel } from './ui/AddPanel';
 import { EmptyCanvas } from './ui/EmptyCanvas';
 import { VirtualDeviceModal } from './ui/VirtualDeviceModal';
 import { SelectionBar } from './ui/SelectionBar';
+import { QuickPanel, type QuickItem } from './ui/QuickPanel';
 import { useBackend } from './useBackend';
 import { useScene } from './useScene';
 import { useView } from './useView';
+import { usePlaceDrag, type PlacePayload } from './usePlaceDrag';
+import { bindScene, buildPreset, type PresetId } from './scenes';
 
 /** Nodus's own virtual device (created here, or Nodus-branded) vs third-party. */
 const isOwnVirtual = (d: AudioDevice) =>
@@ -82,9 +85,147 @@ export default function NodusApp() {
     // TODO(t5): remove the real OS device.
   }, []);
 
+  // Load a preset, bound to the user's real devices/processes so it routes (R18).
+  const loadPreset = useCallback(
+    (id: PresetId) => {
+      const out =
+        backend.devices.find((d) => d.device_type === 'output' && d.is_default) ??
+        backend.devices.find((d) => d.device_type === 'output');
+      const inp =
+        backend.devices.find((d) => d.device_type === 'input' && d.is_default) ??
+        backend.devices.find((d) => d.device_type === 'input');
+      store.replaceScene(
+        bindScene(buildPreset(id), {
+          output: out,
+          input: inp,
+          virtualMic: virtualOwn[0],
+          processes: backend.processes,
+        }),
+      );
+    },
+    [backend.devices, backend.processes, virtualOwn, store],
+  );
+
   // Turning the engine on starts it, then pushes the current graph (proven order).
   const toggleLive = () => backend.setLive(!backend.live, store.applyNow);
   const fitAll = () => viewCtl.fit([...scene.nodes, ...scene.hubs]);
+
+  // ── Quick-controls popup (t13, Phase A) ───────────────────────────────────
+  // Pinned set drives the pin button on each node; the popup lists pinned nodes.
+  const pinnedSet = useMemo(() => new Set(store.pinned), [store.pinned]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const quickItems = useMemo<QuickItem[]>(
+    () =>
+      store.pinned
+        .map((id): QuickItem | null => {
+          const node = scene.nodes.find((n) => n.id === id);
+          if (node) return { kind: 'node', node };
+          const hub = scene.hubs.find((h) => h.id === id);
+          if (hub) return { kind: 'hub', hub };
+          return null;
+        })
+        .filter((x): x is QuickItem => x !== null),
+    [store.pinned, scene.nodes, scene.hubs],
+  );
+  // Temporary trigger until the system tray (Phase B): press "q" to toggle.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'q' && e.key !== 'Q') return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      setQuickOpen((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ── Bridge to the tray flyout window (t13 Phase B2) ────────────────────────
+  // Mirror the pinned snapshot out, and apply control commands coming back.
+  // The flyout is a separate webview with no shared store; the main window stays
+  // the single source of truth. All no-ops in the browser (emit/listen stubs).
+  // When the engine started (epoch ms), for the flyout's uptime clock; null when off.
+  const [liveSince, setLiveSince] = useState<number | null>(null);
+  useEffect(() => {
+    setLiveSince(backend.live ? Date.now() : null);
+  }, [backend.live]);
+
+  const snapshotRef = useRef({
+    live: backend.live,
+    items: quickItems,
+    scenes: store.scenes,
+    activeId: store.activeSceneId,
+    liveSince,
+  });
+  snapshotRef.current = {
+    live: backend.live,
+    items: quickItems,
+    scenes: store.scenes,
+    activeId: store.activeSceneId,
+    liveSince,
+  };
+  useEffect(() => {
+    void emitEvent('quick:snapshot', snapshotRef.current);
+  }, [quickItems, backend.live, store.scenes, store.activeSceneId, liveSince]);
+
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const toggleLiveRef = useRef(toggleLive);
+  toggleLiveRef.current = toggleLive;
+  useEffect(() => {
+    let unReq = () => {};
+    let unCmd = () => {};
+    let alive = true;
+    const bind = (fn: () => void, set: (f: () => void) => void) => (alive ? set(fn) : fn());
+    listenAny('quick:request', () => void emitEvent('quick:snapshot', snapshotRef.current)).then(
+      (f) => bind(f, (x) => (unReq = x)),
+    );
+    listenAny<{ type: string; id?: string; inputId?: string; value?: number; name?: string }>(
+      'quick:cmd',
+      (c) => {
+        const s = storeRef.current;
+        switch (c.type) {
+          case 'nodeVolume':
+            if (c.id) s.setNodeVolume(c.id, c.value ?? 0);
+            break;
+          case 'nodeMute':
+            if (c.id) s.toggleNodeMute(c.id);
+            break;
+          case 'nodeSolo':
+            if (c.id) s.toggleNodeSolo(c.id);
+            break;
+          case 'hubInputVolume':
+            if (c.id && c.inputId) s.setHubInputVolume(c.id, c.inputId, c.value ?? 0);
+            break;
+          case 'unpin':
+            if (c.id) s.togglePin(c.id);
+            break;
+          case 'toggleLive':
+            toggleLiveRef.current();
+            break;
+          case 'sceneSwitch':
+            if (c.id) s.switchScene(c.id);
+            break;
+          case 'sceneAdd':
+            s.newScene();
+            break;
+          case 'sceneClose':
+            if (c.id) s.closeScene(c.id);
+            break;
+          case 'sceneRename':
+            if (c.id && c.name) s.renameScene(c.id, c.name);
+            break;
+          case 'showMain':
+            void winShow();
+            break;
+        }
+      },
+    ).then((f) => bind(f, (x) => (unCmd = x)));
+    return () => {
+      alive = false;
+      unReq();
+      unCmd();
+    };
+  }, []);
 
   // ── Multi-select group actions (R23) ──────────────────────────────────────
   const selectionRef = useRef(selection);
@@ -130,38 +271,28 @@ export default function NodusApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.activeSceneId]);
 
-  // Drop a dragged AddPanel row onto the canvas → create the node where dropped.
-  const onCanvasDragOver = (e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes('application/nodus-add')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    }
-  };
-  const onCanvasDrop = (e: React.DragEvent) => {
-    const raw = e.dataTransfer.getData('application/nodus-add');
-    if (!raw) return;
-    e.preventDefault();
-    let payload: { kind: string; id: string };
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const rect = canvasAreaRef.current?.getBoundingClientRect();
-    const v = viewCtl.view;
-    const wx = (e.clientX - (rect?.left ?? 0) - v.x) / v.zoom;
-    const wy = (e.clientY - (rect?.top ?? 0) - v.y) / v.zoom;
-    const pos = { x: wx - 30, y: wy - 24 }; // drop point lands near the node head
-    if (payload.kind === 'device') {
-      const d = [...backend.devices, ...createdVirtuals].find((x) => x.id === payload.id);
-      if (d) store.addDevice(d, pos);
-    } else if (payload.kind === 'process') {
-      const p = backend.processes.find((x) => x.exe_name === payload.id);
-      if (p) store.addProcess(p, pos);
-    } else if (payload.kind === 'type') {
-      store.addNodeType(payload.id, pos);
-    }
-  };
+  // Place a palette item (device/process/catalog type) at a world position.
+  // `world` already cancels pan/zoom; offset so the drop lands near the head.
+  const placeNode = useCallback(
+    (payload: PlacePayload, world: { x: number; y: number }) => {
+      const pos = { x: world.x - 30, y: world.y - 24 };
+      if (payload.kind === 'device') {
+        const d = [...backend.devices, ...createdVirtuals].find((x) => x.id === payload.id);
+        if (d) store.addDevice(d, pos);
+      } else if (payload.kind === 'process') {
+        const p = backend.processes.find((x) => x.exe_name === payload.id);
+        if (p) store.addProcess(p, pos);
+      } else if (payload.kind === 'type') {
+        store.addNodeType(payload.id, pos);
+      }
+    },
+    [backend.devices, backend.processes, createdVirtuals, store],
+  );
+
+  // Pointer-based drag from the palettes onto the canvas (WebView2-safe).
+  const viewRef = useRef(viewCtl.view);
+  viewRef.current = viewCtl.view;
+  const place = usePlaceDrag({ canvasRef: canvasAreaRef, viewRef, onPlace: placeNode });
 
   return (
     <div className="app-shell">
@@ -173,15 +304,10 @@ export default function NodusApp() {
         onClose={store.closeScene}
         onRename={store.renameScene}
       />
-      <div
-        className="canvas-area"
-        ref={canvasAreaRef}
-        onDragOver={onCanvasDragOver}
-        onDrop={onCanvasDrop}
-      >
+      <div className="canvas-area" ref={canvasAreaRef}>
         <Canvas view={viewCtl.view}>
           {store.isEmpty ? (
-            <EmptyCanvas onPreset={store.loadPreset} />
+            <EmptyCanvas onPreset={loadPreset} />
           ) : (
             <Graph
               nodes={scene.nodes}
@@ -209,7 +335,12 @@ export default function NodusApp() {
               onEdgePan={store.setEdgePan}
               onRemoveEdge={store.removeEdge}
               onRemoveHubInput={store.removeHubInput}
+              onHubInputVolume={store.setHubInputVolume}
               onConnectNewInput={store.connectNewInput}
+              onConnectNewOutput={store.connectNewOutput}
+              onConnectNewBoth={store.connectNewBoth}
+              pinned={pinnedSet}
+              onPin={store.togglePin}
             />
           )}
         </Canvas>
@@ -242,6 +373,7 @@ export default function NodusApp() {
             setPendingVirtualEdit(null);
           }}
           onDeleteVirtual={deleteVirtual}
+          onBeginPlace={place.begin}
         />
         <AddPanel
           nodes={store.nodeCount}
@@ -250,9 +382,31 @@ export default function NodusApp() {
           processes={backend.processes}
           onAddDevice={store.addDevice}
           onAddProcess={store.addProcess}
+          onBeginPlace={place.begin}
         />
         {setupOpen && <VirtualDeviceModal onClose={() => setSetupOpen(false)} />}
       </div>
+      {quickOpen && (
+        <QuickPanel
+          items={quickItems}
+          live={backend.live}
+          onToggleLive={toggleLive}
+          onNodeVolume={store.setNodeVolume}
+          onNodeMute={store.toggleNodeMute}
+          onNodeSolo={store.toggleNodeSolo}
+          onHubInputVolume={store.setHubInputVolume}
+          onUnpin={store.togglePin}
+          onClose={() => setQuickOpen(false)}
+        />
+      )}
+      {place.ghost && (
+        <div
+          className="place-ghost"
+          style={{ left: place.ghost.x + 14, top: place.ghost.y + 14 }}
+        >
+          {place.ghost.label}
+        </div>
+      )}
     </div>
   );
 }

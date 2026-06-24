@@ -53,6 +53,7 @@ export function BottomBar({
   onCreateVirtual,
   onRenameVirtual,
   onDeleteVirtual,
+  onBeginPlace,
 }: {
   onSearch?: (q: string) => void;
   /** Nodus's own virtual devices (created + branded) and third-party ones. */
@@ -65,6 +66,13 @@ export function BottomBar({
   onCreateVirtual?: () => void;
   onRenameVirtual?: (id: string, name: string) => void;
   onDeleteVirtual?: (id: string) => void;
+  /** Begin a pointer-based drag of a catalog node / device onto the canvas. */
+  onBeginPlace?: (
+    e: React.PointerEvent,
+    payload: { kind: 'device' | 'type'; id: string },
+    label: string,
+    onTap: () => void,
+  ) => void;
 }) {
   const [active, setActive] = useState<Tab | null>(null);
   // Remember the last category so the list keeps its content while it
@@ -92,17 +100,17 @@ export function BottomBar({
     setActive((cur) => (cur === t ? null : t));
   };
 
-  // Drag a catalog card onto the canvas → create that node type where dropped.
-  const onCardDragStart = (e: React.DragEvent, typeId: string) => {
-    e.dataTransfer.setData('application/nodus-add', JSON.stringify({ kind: 'type', id: typeId }));
-    e.dataTransfer.effectAllowed = 'copy';
+  // Press a catalog card → pointer-drag it onto the canvas (WebView2-safe).
+  const startType = (e: React.PointerEvent, n: NodeType) => {
+    onBeginPlace?.(e, { kind: 'type', id: n.id }, n.name, () => {});
     setActive(null);
   };
-  // Drag a virtual device → an instance node bound to it (drag again = another
-  // instance of the SAME device).
-  const onDeviceDragStart = (e: React.DragEvent, deviceId: string) => {
-    e.dataTransfer.setData('application/nodus-add', JSON.stringify({ kind: 'device', id: deviceId }));
-    e.dataTransfer.effectAllowed = 'copy';
+  // Press a virtual device card → pointer-drag an instance node bound to it
+  // (each drag = another instance of the SAME device). Ignore presses that land
+  // on the card's interactive bits (rename input / delete ×).
+  const startDevice = (e: React.PointerEvent, dev: AudioDevice, label: string) => {
+    if ((e.target as HTMLElement).closest('input, .bb-card-x')) return;
+    onBeginPlace?.(e, { kind: 'device', id: dev.id }, label, () => {});
     setActive(null);
   };
 
@@ -116,8 +124,7 @@ export function BottomBar({
         className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
         role="button"
         tabIndex={active ? 0 : -1}
-        draggable
-        onDragStart={(e) => onDeviceDragStart(e, dev.id)}
+        onPointerDown={(e) => startDevice(e, dev, name)}
       >
         {created ? (
           <EditableName
@@ -195,17 +202,18 @@ export function BottomBar({
                     {items.map((n) => {
                       const m = matchOf(n.name);
                       return (
-                        <button
+                        // Pointer-based drag (native HTML5 drag doesn't start
+                        // reliably in WebView2). Press + move places on canvas.
+                        <div
                           key={n.id}
                           className={`bb-card ${m === 'match' ? 'is-match' : ''} ${m === 'dim' ? 'is-dim' : ''}`}
+                          role="button"
                           tabIndex={active ? 0 : -1}
-                          draggable
-                          onDragStart={(e) => onCardDragStart(e, n.id)}
-                          onClick={() => setActive(null)}
+                          onPointerDown={(e) => startType(e, n)}
                         >
                           <span className="bb-card-name">{n.name}</span>
                           <span className="bb-card-sub">{n.sub}</span>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>

@@ -29,6 +29,8 @@ export function NodeCard({
   onVolume,
   onMute,
   onSolo,
+  onPin,
+  pinned,
   onDuplicate,
   onDelete,
   onRename,
@@ -40,6 +42,8 @@ export function NodeCard({
   onVolume?: (id: string, volume: number) => void;
   onMute?: (id: string) => void;
   onSolo?: (id: string) => void;
+  onPin?: (id: string) => void;
+  pinned?: boolean;
   onDuplicate?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, name: string) => void;
@@ -95,6 +99,8 @@ export function NodeCard({
           <NodeToolbar
             soloActive={node.solo}
             onSolo={onSolo ? () => onSolo(node.id) : undefined}
+            pinActive={pinned}
+            onPin={onPin ? () => onPin(node.id) : undefined}
             onDuplicate={() => onDuplicate?.(node.id)}
             onDelete={() => onDelete?.(node.id)}
           />

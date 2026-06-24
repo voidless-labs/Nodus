@@ -8,11 +8,16 @@
 export function NodeToolbar({
   onSolo,
   soloActive,
+  onPin,
+  pinActive,
   onDuplicate,
   onDelete,
 }: {
   onSolo?: () => void;
   soloActive?: boolean;
+  /** Pin/unpin to the quick-controls popup (t13). */
+  onPin?: () => void;
+  pinActive?: boolean;
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
@@ -27,6 +32,17 @@ export function NodeToolbar({
           onClick={onSolo}
         >
           <IconSolo />
+        </button>
+      )}
+      {onPin && (
+        <button
+          className={`node-tb-btn ${pinActive ? 'is-active' : ''}`}
+          title={pinActive ? 'unpin from quick controls' : 'pin to quick controls'}
+          aria-label="pin"
+          aria-pressed={pinActive}
+          onClick={onPin}
+        >
+          <IconPin />
         </button>
       )}
       <button className="node-tb-btn" title="duplicate" aria-label="duplicate" onClick={onDuplicate}>
@@ -59,6 +75,13 @@ function IconSolo() {
   return (
     <svg {...IC}>
       <path d="M12 3v18M7 6v12M17 6v12M3 10v4M21 10v4" />
+    </svg>
+  );
+}
+function IconPin() {
+  return (
+    <svg {...IC}>
+      <path d="M12 17v5M9 3h6l-1 6 3 3v1H7v-1l3-3-1-6Z" />
     </svg>
   );
 }
