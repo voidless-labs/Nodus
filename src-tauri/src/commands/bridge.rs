@@ -254,6 +254,7 @@ mod tests {
             device_type: DeviceType::Output,
             is_default: true,
             original_name: None,
+            is_virtual: false,
         };
         let json = serde_json::to_string(&d).unwrap();
         let back: AudioDevice = serde_json::from_str(&json).unwrap();

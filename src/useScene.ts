@@ -44,15 +44,21 @@ const nid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(_seq++)
 type Pos = { x: number; y: number };
 
 function deviceNode(d: AudioDevice, scene: Scene, pos?: Pos): NodeModel {
-  const isVirtual = d.device_type === 'virtual';
-  const isInput = d.device_type === 'input';
-  const low = d.name.toLowerCase();
-  const micSink = isVirtual && low.includes('mic');
-  // input device = source (left); output/virtual = target (right).
-  const side = isInput ? 'left' : 'right';
+  const isVirtual = !!d.is_virtual;
+  const isInput = d.device_type === 'input'; // capture
+  const isOwn = /nodus/i.test(`${d.name} ${d.original_name ?? ''}`);
+  // Port direction follows the data flow + ownership (t9):
+  //  - capture (input) → source you READ from → output port  …EXCEPT
+  //  - OUR virtual mic (capture we FEED) → a sink → input port (micSink),
+  //  - render (output), incl. virtual cables → a sink → input port.
+  const micSink = isVirtual && isInput && isOwn;
+  const hasOutput = isInput && !micSink;
+  // Color by type; virtual devices are purple regardless of port direction.
+  const kind: NodeModel['kind'] = isVirtual ? 'virtual' : isInput ? 'source' : 'output';
+  const side = hasOutput ? 'left' : 'right';
   return {
     id: nid('n'),
-    kind: isInput ? 'source' : isVirtual ? 'virtual' : 'output',
+    kind,
     micSink: micSink || undefined,
     name: d.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || d.name,
     // Real device name like AddPanel: original_name, else the "(…)" suffix, else type.
@@ -61,8 +67,8 @@ function deviceNode(d: AudioDevice, scene: Scene, pos?: Pos): NodeModel {
     level: 0,
     volume: 1,
     active: true,
-    hasInput: !isInput,
-    hasOutput: isInput,
+    hasInput: !hasOutput,
+    hasOutput,
     ...(pos ?? placeFor(scene, side)),
   };
 }

@@ -116,6 +116,10 @@ export function BottomBar({
 
   const deviceCard = (dev: AudioDevice) => {
     const name = dev.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || dev.name;
+    // Real device name (so two "Микрофон" cards are distinguishable): original_name,
+    // else the "(…)" suffix, else a generic hint.
+    const sub =
+      dev.original_name ?? dev.name.match(/\(([^)]*)\)\s*$/)?.[1] ?? 'virtual device · drag to add';
     const m = matchOf(name);
     const created = createdIds?.has(dev.id) ?? false;
     return (
@@ -137,7 +141,7 @@ export function BottomBar({
         ) : (
           <span className="bb-card-name">{name}</span>
         )}
-        <span className="bb-card-sub">virtual device · drag to add</span>
+        <span className="bb-card-sub">{sub}</span>
         {created && (
           <button
             className="bb-card-x"

@@ -312,7 +312,7 @@ mod tests {
     use super::*;
 
     fn dev(name: &str, t: DeviceType) -> AudioDevice {
-        AudioDevice { id: format!("id-{name}"), name: name.to_string(), device_type: t, is_default: false, original_name: None }
+        AudioDevice { id: format!("id-{name}"), name: name.to_string(), device_type: t, is_default: false, original_name: None, is_virtual: false }
     }
 
     #[test]

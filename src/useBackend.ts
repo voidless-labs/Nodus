@@ -25,8 +25,15 @@ const SAMPLE_DEVICES: AudioDevice[] = [
   { id: 'dev-hp', name: 'Headphones (Galaxy Buds)', device_type: 'output', is_default: true },
   { id: 'dev-spk', name: 'Speakers (Realtek)', device_type: 'output', is_default: false },
   { id: 'dev-mic', name: 'Microphone (Blue Yeti)', device_type: 'input', is_default: true },
-  { id: 'dev-nodusmic', name: 'Nodus Mic', device_type: 'virtual', is_default: false },
-  { id: 'dev-cable', name: 'CABLE Input', device_type: 'virtual', is_default: false, original_name: 'VB-Audio Virtual Cable' },
+  // device_type = data flow (capture/render); is_virtual = software device (t9).
+  // Our Nodus mic: a capture endpoint we FEED → treated as a sink.
+  { id: 'dev-nodusmic', name: 'Nodus Mic', device_type: 'input', is_default: false, is_virtual: true },
+  // VB-Cable Input: a render endpoint you WRITE to → a sink.
+  { id: 'dev-cable', name: 'CABLE Input', device_type: 'output', is_default: false, is_virtual: true, original_name: 'VB-Audio Virtual Cable' },
+  // Third-party virtual mics (another router): capture endpoints you READ from → sources.
+  // Two of them share the display name "Микрофон" — distinguished by the real name.
+  { id: 'dev-mixline-s', name: 'Микрофон (MIXLINE Stream)', device_type: 'input', is_default: false, is_virtual: true },
+  { id: 'dev-mixline-r', name: 'Микрофон (MIXLINE Record)', device_type: 'input', is_default: false, is_virtual: true },
 ];
 
 // A crisp SVG so the icon path is visible in the browser preview (no Tauri).

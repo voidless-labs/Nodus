@@ -18,9 +18,12 @@ export type DeviceType = 'input' | 'output' | 'virtual';
 export interface AudioDevice {
   id: string;
   name: string;
+  /** Data flow: input = capture, output = render (drives port direction). */
   device_type: DeviceType;
   is_default: boolean;
   original_name?: string | null;
+  /** Software/virtual device (VB-Cable, VoiceMeeter, MIXLINE, Nodus…) — t9. */
+  is_virtual?: boolean;
 }
 
 export type SourceType =

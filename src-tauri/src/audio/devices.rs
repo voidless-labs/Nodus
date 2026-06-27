@@ -30,6 +30,33 @@ pub struct AudioDevice {
     /// Populated only when `name` has been rebranded via apply_nodus_labels.
     #[serde(default)]
     pub original_name: Option<String>,
+    /// True for software/virtual audio devices (VB-Cable, VoiceMeeter, MIXLINE,
+    /// Nodus, …) as opposed to real hardware. `device_type` still carries the
+    /// data flow (Input = capture, Output = render) — that drives port direction;
+    /// `is_virtual` only affects classification/badging in the UI. (t9)
+    #[serde(default)]
+    pub is_virtual: bool,
+}
+
+/// Heuristic: does this audio endpoint belong to a software/virtual driver?
+/// Name-list of common virtual-audio vendors (cheap and reliable for the ones
+/// users actually have). Enumerator/form-factor signals are a future refinement.
+pub fn is_virtual_device(name: &str) -> bool {
+    let n = name.to_lowercase();
+    const MARKERS: &[&str] = &[
+        "virtual",
+        "vb-audio",
+        "cable",
+        "voicemeeter",
+        "vac",
+        "mixline",
+        "nodus",
+        "steam streaming",
+        "nvidia broadcast",
+        "rtx voice",
+        "obs",
+    ];
+    MARKERS.iter().any(|m| n.contains(m))
 }
 
 // ── Windows implementation ─────────────────────────────────────────────────
@@ -135,12 +162,14 @@ mod platform {
                 let is_default = default_id.as_deref() == Some(&id);
 
                 debug!("found device [{dev_type:?}] {name} ({id})");
+                let is_virtual = is_virtual_device(&name);
                 devices.push(AudioDevice {
                     id,
                     name,
                     device_type: dev_type.clone(),
                     is_default,
                     original_name: None,
+                    is_virtual,
                 });
             }
         }
@@ -186,6 +215,7 @@ mod platform {
             device_type: DeviceType::Output,
             is_default: true,
             original_name: None,
+            is_virtual: false,
         }])
     }
 }
@@ -218,8 +248,24 @@ mod tests {
             device_type: DeviceType::Output,
             is_default: false,
             original_name: None,
+            is_virtual: false,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"output\""));
+    }
+
+    #[test]
+    fn detects_virtual_devices() {
+        for name in [
+            "CABLE Output (VB-Audio Virtual Cable)",
+            "Микрофон (MIXLINE Stream)",
+            "VoiceMeeter Output",
+            "Nodus Mic",
+        ] {
+            assert!(is_virtual_device(name), "expected virtual: {name}");
+        }
+        for name in ["Headphones (Galaxy Buds)", "Microphone (Blue Yeti)", "Speakers (Realtek)"] {
+            assert!(!is_virtual_device(name), "expected physical: {name}");
+        }
     }
 }

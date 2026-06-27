@@ -47,30 +47,29 @@ export default function NodusApp() {
   const createdIds = useMemo(() => new Set(createdVirtuals.map((d) => d.id)), [createdVirtuals]);
   const virtualOwn = useMemo(
     () => [
-      ...backend.devices.filter((d) => d.device_type === 'virtual' && isOwnVirtual(d)),
+      ...backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)),
       ...createdVirtuals,
     ],
     [backend.devices, createdVirtuals],
   );
   const virtualOther = useMemo(
-    () => backend.devices.filter((d) => d.device_type === 'virtual' && !isOwnVirtual(d)),
+    () => backend.devices.filter((d) => d.is_virtual && !isOwnVirtual(d)),
     [backend.devices],
   );
   const physicalDevices = useMemo(
-    () => backend.devices.filter((d) => d.device_type !== 'virtual'),
+    () => backend.devices.filter((d) => !d.is_virtual),
     [backend.devices],
   );
   const createVirtualDevice = useCallback(() => {
     const id = `nodus-virtual-${Date.now().toString(36)}`;
     setCreatedVirtuals((v) => {
       // Number by OUR virtual devices only (Nodus-branded backend + created).
-      const ownBackend = backend.devices.filter(
-        (d) => d.device_type === 'virtual' && isOwnVirtual(d),
-      ).length;
+      const ownBackend = backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)).length;
       const n = ownBackend + v.length + 1;
       return [
         ...v,
-        { id, name: `Nodus Mic ${n}`, device_type: 'virtual', is_default: false, original_name: null },
+        // Our virtual mic: a capture endpoint we feed → input + virtual (→ sink on canvas).
+        { id, name: `Nodus Mic ${n}`, device_type: 'input', is_default: false, original_name: null, is_virtual: true },
       ];
     });
     setPendingVirtualEdit(id); // open its name field for the user to set a name
