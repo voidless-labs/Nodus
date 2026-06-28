@@ -819,6 +819,8 @@ pub mod platform {
         device_id: String,
         format: AudioFormat,
         stop_flag: Arc<AtomicBool>,
+        /// Post-volume RMS of the rendered stream, dBFS-scaled [0,1] (output VU, t16).
+        level: Arc<std::sync::atomic::AtomicU32>,
     }
 
     impl AudioRenderer {
@@ -827,7 +829,14 @@ pub mod platform {
                 device_id: device_id.into(),
                 format,
                 stop_flag: Arc::new(AtomicBool::new(false)),
+                level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             }
+        }
+
+        /// Current post-volume output level [0,1] for the VU meter on this route's
+        /// destination (the engine aggregates per output device).
+        pub fn current_level(&self) -> f32 {
+            f32::from_bits(self.level.load(Ordering::Relaxed))
         }
 
         /// Start rendering frames from `source`. `volume` and `muted` are applied per-sample.
@@ -841,10 +850,11 @@ pub mod platform {
             let device_id = self.device_id.clone();
             let format = self.format;
             let stop_flag = Arc::clone(&self.stop_flag);
+            let level = Arc::clone(&self.level);
 
             std::thread::spawn(move || {
                 if let Err(e) =
-                    run_render(device_id, format, stop_flag, &mut source, volume, muted, pan)
+                    run_render(device_id, format, stop_flag, &mut source, volume, muted, pan, level)
                 {
                     error!("audio render error: {e}");
                 }
@@ -856,6 +866,7 @@ pub mod platform {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_render(
         device_id: String,
         format: AudioFormat,
@@ -864,6 +875,7 @@ pub mod platform {
         volume_atomic: Arc<std::sync::atomic::AtomicU32>,
         muted: Arc<AtomicBool>,
         pan_atomic: Arc<std::sync::atomic::AtomicU32>,
+        level: Arc<std::sync::atomic::AtomicU32>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
@@ -929,6 +941,10 @@ pub mod platform {
 
             debug!("render started on device {device_id}");
 
+            // When the last frame arrived — the VU decays only after a real silence
+            // gap, not between bursty chunks (which would make it sawtooth).
+            let mut last_audio = std::time::Instant::now();
+
             while !stop_flag.load(Ordering::SeqCst) {
                 match source.try_recv() {
                     Ok(mut frame) => {
@@ -952,6 +968,19 @@ pub mod platform {
                             for sample in &mut frame {
                                 *sample *= vol;
                             }
+                        }
+
+                        // Post-volume RMS → dBFS [-60,0] → [0,1], smoothed (fast
+                        // attack / slow release) so the output VU isn't jerky.
+                        if !frame.is_empty() {
+                            let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
+                            let rms = (sum_sq / frame.len() as f32).sqrt();
+                            let db = 20.0 * rms.max(1e-7_f32).log10();
+                            let raw = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                            let prev = f32::from_bits(level.load(Ordering::Relaxed));
+                            let smoothed = if raw >= prev { raw } else { prev * 0.82 + raw * 0.18 };
+                            level.store(smoothed.to_bits(), Ordering::Relaxed);
+                            last_audio = std::time::Instant::now();
                         }
 
                         // Write the WHOLE frame, in parts if the WASAPI buffer is
@@ -987,7 +1016,13 @@ pub mod platform {
                     Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
                         // No frame yet — sleep briefly. WASAPI shared mode handles
                         // underruns gracefully (inserts silence itself); don't pre-fill
-                        // with zeros or the buffer fills up and drops incoming audio frames.
+                        // with zeros or the buffer fills up and drops incoming frames.
+                        // Decay the VU only after a real silence gap (>40 ms), not
+                        // between bursty chunks — otherwise the meter sawtooths.
+                        if last_audio.elapsed() > Duration::from_millis(40) {
+                            let prev = f32::from_bits(level.load(Ordering::Relaxed));
+                            level.store(if prev > 0.001 { (prev * 0.9).to_bits() } else { 0 }, Ordering::Relaxed);
+                        }
                         std::thread::sleep(Duration::from_millis(1));
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
@@ -1096,6 +1131,8 @@ pub mod platform {
         pub fn new(device_id: impl Into<String>, _format: AudioFormat) -> Self {
             Self { device_id: device_id.into() }
         }
+
+        pub fn current_level(&self) -> f32 { 0.0 }
 
         pub fn start(
             &self,

@@ -106,6 +106,15 @@ impl RouteSink {
             RouteSink::VirtualMic(v) => v.stop(),
         }
     }
+
+    /// Post-volume output level [0,1] of this sink (for the destination VU meter).
+    /// VirtualMic has no meter yet → 0.
+    fn current_level(&self) -> f32 {
+        match self {
+            RouteSink::Wasapi(r) => r.current_level(),
+            RouteSink::VirtualMic(_) => 0.0,
+        }
+    }
 }
 
 struct RouteHandles {
@@ -115,6 +124,12 @@ struct RouteHandles {
     pan: Arc<AtomicU32>,
     /// None for same-device routes (no sink, capture is suppressed to avoid feedback).
     sink: Option<RouteSink>,
+    /// Edge ids source→…→output. Effective volume = product of these edges'
+    /// volumes; effective mute = OR. Lets an intermediate edge (e.g. a Mixer-input
+    /// slider) update this route live, not just the final edge into the output.
+    chain: Vec<String>,
+    /// Destination device id — used to aggregate output VU per device (t16).
+    to_device_id: String,
 }
 
 struct CaptureHandle {
@@ -201,34 +216,49 @@ impl RoutingEngine {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// Update mute on a live route without restarting the engine.
-    pub fn set_route_mute(&self, route_id: &str, muted: bool) -> Result<(), EngineError> {
-        {
-            let mut g = lock_recover(&self.graph);
-            g.set_mute(&route_id.to_string(), muted)
-                .map_err(|e| EngineError::Session(e.to_string()))?;
+    /// Update mute on a live edge (any edge in a chain) without restarting.
+    /// A route is effectively muted if ANY edge in its chain is muted.
+    pub fn set_route_mute(&self, edge_id: &str, muted: bool) -> Result<(), EngineError> {
+        let mut g = lock_recover(&self.graph);
+        if g.set_mute(&edge_id.to_string(), muted).is_err() {
+            return Ok(()); // edge not in the applied graph — picked up on next apply
         }
-        if let Some(handles) = lock_recover(&self.routes).get(route_id) {
-            for handle in handles {
-                // Per-route: mute only our captured copy, not the app/device globally.
-                handle.muted.store(muted, Ordering::Relaxed);
+        let routes = lock_recover(&self.routes);
+        for handles in routes.values() {
+            for h in handles {
+                if h.chain.iter().any(|c| c.as_str() == edge_id) {
+                    let eff = h
+                        .chain
+                        .iter()
+                        .any(|c| g.get_route(c).map(|r| r.muted).unwrap_or(false));
+                    h.muted.store(eff, Ordering::Relaxed);
+                }
             }
         }
         Ok(())
     }
 
-    /// Update volume on a live route without restarting the engine.
-    pub fn set_route_volume(&self, route_id: &str, volume: f32) -> Result<(), EngineError> {
+    /// Update volume on a live edge (any edge in a chain) without restarting.
+    /// The route's effective volume is the product of its chain edges' volumes,
+    /// so an intermediate edge (a Mixer-input slider) takes effect, not only the
+    /// final edge into the output.
+    pub fn set_route_volume(&self, edge_id: &str, volume: f32) -> Result<(), EngineError> {
         let volume = clamp_volume(volume);
-        {
-            let mut g = lock_recover(&self.graph);
-            g.set_volume(&route_id.to_string(), volume)
-                .map_err(|e| EngineError::Session(e.to_string()))?;
+        let mut g = lock_recover(&self.graph);
+        if g.set_volume(&edge_id.to_string(), volume).is_err() {
+            return Ok(()); // edge not in the applied graph — picked up on next apply
         }
-        if let Some(handles) = lock_recover(&self.routes).get(route_id) {
-            for handle in handles {
-                // Per-route: scale only our captured copy, not the app/device globally.
-                handle.volume.store(volume_to_atomic(volume), Ordering::Relaxed);
+        let routes = lock_recover(&self.routes);
+        for handles in routes.values() {
+            for h in handles {
+                if h.chain.iter().any(|c| c.as_str() == edge_id) {
+                    let eff: f32 = h
+                        .chain
+                        .iter()
+                        .map(|c| g.get_route(c).map(|r| r.volume).unwrap_or(1.0))
+                        .product();
+                    h.volume.store(volume_to_atomic(eff), Ordering::Relaxed);
+                }
             }
         }
         Ok(())
@@ -239,8 +269,9 @@ impl RoutingEngine {
         let pan = pan.clamp(-1.0, 1.0);
         {
             let mut g = lock_recover(&self.graph);
-            g.set_pan(&route_id.to_string(), pan)
-                .map_err(|e| EngineError::Session(e.to_string()))?;
+            if g.set_pan(&route_id.to_string(), pan).is_err() {
+                return Ok(()); // edge not in the applied graph — picked up on next apply
+            }
         }
         if let Some(handles) = lock_recover(&self.routes).get(route_id) {
             for handle in handles {
@@ -250,17 +281,44 @@ impl RoutingEngine {
         Ok(())
     }
 
-    /// Current RMS levels keyed by source identifier (for VU meters in UI).
-    /// App-capture sources are keyed by exe_name (e.g. "spotify.exe");
-    /// device sources are keyed by WASAPI device ID.
-    pub fn get_source_levels(&self) -> HashMap<String, f32> {
-        lock_recover(&self.captures)
+    /// Current VU levels [0,1] for the UI, keyed by:
+    ///  - source: exe_name (apps) or WASAPI device id (device sources);
+    ///  - output: destination device id — the COMBINED post-volume level of every
+    ///    route rendering to that device (so two apps → one output show one merged
+    ///    meter). Combined in linear RMS space, then re-scaled to dBFS [0,1] (t16).
+    pub fn get_levels(&self) -> HashMap<String, f32> {
+        // Per-source capture levels.
+        let mut levels: HashMap<String, f32> = lock_recover(&self.captures)
             .iter()
             .map(|(device_id, handle)| {
                 let key = handle.exe_name.clone().unwrap_or_else(|| device_id.clone());
                 (key, handle.capture.current_level())
             })
-            .collect()
+            .collect();
+
+        // Combined per-destination output levels. Each route's level is dBFS-scaled
+        // [0,1]; convert back to linear, sum squares per device, take RMS, re-scale.
+        let mut sumsq: HashMap<String, f32> = HashMap::new();
+        for handles in lock_recover(&self.routes).values() {
+            for h in handles {
+                if h.to_device_id.is_empty() {
+                    continue;
+                }
+                if let Some(sink) = &h.sink {
+                    let scaled = sink.current_level();
+                    if scaled <= 0.0 {
+                        continue;
+                    }
+                    let lin = 10f32.powf((scaled * 60.0 - 60.0) / 20.0);
+                    *sumsq.entry(h.to_device_id.clone()).or_insert(0.0) += lin * lin;
+                }
+            }
+        }
+        for (dev, ss) in sumsq {
+            let db = 20.0 * ss.sqrt().max(1e-7_f32).log10();
+            levels.insert(dev, ((db + 60.0) / 60.0).clamp(0.0, 1.0));
+        }
+        levels
     }
 
     fn start_internal(&self) -> Result<(), EngineError> {
@@ -417,7 +475,14 @@ impl RoutingEngine {
             routes
                 .entry(ar.route_id)
                 .or_default()
-                .push(RouteHandles { volume, muted, pan, sink: None });
+                .push(RouteHandles {
+                    volume,
+                    muted,
+                    pan,
+                    sink: None,
+                    chain: ar.chain,
+                    to_device_id: ar.to_device_id,
+                });
             return Ok(());
         }
 
@@ -464,7 +529,14 @@ impl RoutingEngine {
         routes
             .entry(ar.route_id)
             .or_default()
-            .push(RouteHandles { volume, muted, pan, sink: Some(sink) });
+            .push(RouteHandles {
+                volume,
+                muted,
+                pan,
+                sink: Some(sink),
+                chain: ar.chain,
+                to_device_id: ar.to_device_id,
+            });
         Ok(())
     }
 

@@ -255,6 +255,11 @@ impl Graph {
 #[derive(Debug, Clone)]
 pub struct ActiveRoute {
     pub route_id: RouteId,
+    /// Every edge id traversed source→…→output for this physical route. The
+    /// effective volume is the product of these edges' volumes; the engine
+    /// recomputes it live when ANY edge in the chain changes (so a Mixer-input
+    /// slider — an intermediate edge — takes effect without a graph restart).
+    pub chain: Vec<RouteId>,
     pub from_device_id: String,
     /// Set for app-capture sources (e.g. "spotify.exe") — engine resolves device via session mgr.
     pub exe_name: Option<String>,
@@ -294,6 +299,7 @@ impl Graph {
                     is_virtual,
                     1.0,
                     false,
+                    Vec::new(),
                     &mut result,
                     0,
                 );
@@ -311,6 +317,7 @@ impl Graph {
         source_is_virtual: bool,
         inherited_volume: f32,
         inherited_mute: bool,
+        chain: Vec<RouteId>,
         out: &mut Vec<ActiveRoute>,
         depth: usize,
     ) {
@@ -320,6 +327,8 @@ impl Graph {
         for route in self.routes_from(current) {
             let volume = inherited_volume * route.volume;
             let muted = inherited_mute || route.muted;
+            let mut chain = chain.clone();
+            chain.push(route.id.clone());
 
             if let Some(dest) = self.nodes.get(&route.to_node) {
                 match dest.node_type {
@@ -327,6 +336,7 @@ impl Graph {
                         if !dest.device_id.is_empty() {
                             out.push(ActiveRoute {
                                 route_id: route.id.clone(),
+                                chain: chain.clone(),
                                 from_device_id: source_device.to_string(),
                                 exe_name: source_exe.clone(),
                                 from_is_virtual: source_is_virtual,
@@ -349,6 +359,7 @@ impl Graph {
                             source_is_virtual,
                             volume,
                             muted,
+                            chain.clone(),
                             out,
                             depth + 1,
                         );
@@ -517,6 +528,11 @@ mod tests {
             routes.iter().map(|r| r.from_device_id.as_str()).collect();
         assert_eq!(froms.len(), 2);
         assert!(routes.iter().all(|r| r.to_device_id == "out-dev"));
+        // Each path's chain is [source→mixer edge, mixer→output edge], ending with
+        // the shared output edge — the engine recomputes effective volume from it,
+        // so an intermediate (Mixer-input) edge's volume takes effect live.
+        assert!(routes.iter().all(|r| r.chain.len() == 2), "chain = both edges");
+        assert!(routes.iter().all(|r| r.chain.last() == Some(&out_edge_id)));
     }
 
     #[test]

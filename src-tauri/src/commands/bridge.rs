@@ -205,8 +205,8 @@ pub fn setup_background_tasks(handle: AppHandle) {
         loop {
             std::thread::sleep(Duration::from_millis(66));
             let engine = handle_levels.state::<EngineState>();
-            // Engine is lock-free to query now; get_source_levels takes only the
-            // short-lived internal captures lock.
+            // Engine is lock-free to query now; get_levels takes only the
+            // short-lived internal captures/routes locks.
             if !engine.0.is_running() {
                 if !prev.is_empty() {
                     prev.clear(); // engine stopped — let the UI zero the meters
@@ -216,7 +216,7 @@ pub fn setup_background_tasks(handle: AppHandle) {
                 }
                 continue;
             }
-            let levels = engine.0.get_source_levels();
+            let levels = engine.0.get_levels();
             let changed = levels.len() != prev.len()
                 || levels
                     .iter()

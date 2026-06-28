@@ -163,16 +163,19 @@ export function applyRoutingGraph(graph: RoutingGraph): Promise<unknown> {
   return call('apply_routing_graph', { graph });
 }
 
+// Tauri 1.x maps JS camelCase invoke args to snake_case Rust params, so the key
+// MUST be `routeId` (not `route_id`) or the command's `route_id` arg is missing
+// and the invoke is silently rejected. We send both keys to be safe. (t16 fix)
 export function setRouteMute(routeId: string, muted: boolean): Promise<unknown> {
-  return call('set_route_mute', { route_id: routeId, muted });
+  return call('set_route_mute', { routeId, route_id: routeId, muted });
 }
 
 export function setRouteVolume(routeId: string, volume: number): Promise<unknown> {
-  return call('set_route_volume', { route_id: routeId, volume });
+  return call('set_route_volume', { routeId, route_id: routeId, volume });
 }
 
 export function setRoutePan(routeId: string, pan: number): Promise<unknown> {
-  return call('set_route_pan', { route_id: routeId, pan });
+  return call('set_route_pan', { routeId, route_id: routeId, pan });
 }
 
 export function startEngine(): Promise<unknown> {

@@ -489,6 +489,9 @@ export function useScene(live: boolean): SceneStore {
   }, []);
 
   // Node slider = master for this node: mirror it onto every adjacent route's trim.
+  // Always push to the engine — it applies live when running and ignores the edge
+  // otherwise (invoke is a no-op in the browser). We don't gate on a local "live"
+  // flag, which can desync from the actual engine state.
   const setNodeVolume = useCallback(
     (id: string, volume: number) => {
       patchNodes((ns) => ns.map((n) => (n.id === id ? { ...n, volume } : n)));
@@ -496,13 +499,11 @@ export function useScene(live: boolean): SceneStore {
       patchEdges((es) =>
         es.map((e) => (adj.some((a) => a.id === e.id) ? { ...e, volume } : e)),
       );
-      if (liveRef.current) {
-        adj.forEach((e) =>
-          void bridgeSetRouteVolume(e.id, volume).catch((err) =>
-            console.error('set_route_volume:', err),
-          ),
-        );
-      }
+      adj.forEach((e) =>
+        void bridgeSetRouteVolume(e.id, volume).catch((err) =>
+          console.error('set_route_volume:', err),
+        ),
+      );
     },
     [patchNodes, patchEdges, adjacentEdges],
   );
@@ -569,27 +570,25 @@ export function useScene(live: boolean): SceneStore {
     [applyLater],
   );
 
+  // Edge popover sliders → straight to the engine (always; see setNodeVolume).
   const setEdgeVolume = useCallback(
     (id: string, volume: number) => {
       patchEdges((es) => es.map((e) => (e.id === id ? { ...e, volume } : e)));
-      if (liveRef.current)
-        void bridgeSetRouteVolume(id, volume).catch((e) => console.error('set_route_volume:', e));
+      void bridgeSetRouteVolume(id, volume).catch((e) => console.error('set_route_volume:', e));
     },
     [patchEdges],
   );
   const setEdgeMute = useCallback(
     (id: string, muted: boolean) => {
       patchEdges((es) => es.map((e) => (e.id === id ? { ...e, muted } : e)));
-      if (liveRef.current)
-        void bridgeSetRouteMute(id, muted).catch((e) => console.error('set_route_mute:', e));
+      void bridgeSetRouteMute(id, muted).catch((e) => console.error('set_route_mute:', e));
     },
     [patchEdges],
   );
   const setEdgePan = useCallback(
     (id: string, pan: number) => {
       patchEdges((es) => es.map((e) => (e.id === id ? { ...e, pan } : e)));
-      if (liveRef.current)
-        void bridgeSetRoutePan(id, pan).catch((e) => console.error('set_route_pan:', e));
+      void bridgeSetRoutePan(id, pan).catch((e) => console.error('set_route_pan:', e));
     },
     [patchEdges],
   );
@@ -698,7 +697,7 @@ export function useScene(live: boolean): SceneStore {
         ),
         edges: edge ? s.edges.map((e) => (e.id === edge.id ? { ...e, volume } : e)) : s.edges,
       }));
-      if (edge && liveRef.current)
+      if (edge)
         void bridgeSetRouteVolume(edge.id, volume).catch((err) =>
           console.error('set_route_volume:', err),
         );
