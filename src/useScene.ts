@@ -46,12 +46,17 @@ type Pos = { x: number; y: number };
 function deviceNode(d: AudioDevice, scene: Scene, pos?: Pos): NodeModel {
   const isVirtual = !!d.is_virtual;
   const isInput = d.device_type === 'input'; // capture
-  // A virtual device is a software pipe — it doesn't produce audio on its own,
-  // you route audio INTO it. So EVERY virtual device is a sink (input port),
-  // regardless of the OS data flow. Physical devices keep data-flow ports:
-  // a physical mic is a source (output port), a physical speaker is a sink. (t9)
-  const micSink = isVirtual && isInput; // a virtual capture endpoint reads "mic"
-  const hasOutput = !isVirtual && isInput; // only a physical capture device is a source
+  const isOwn = /nodus/i.test(`${d.name} ${d.original_name ?? ''}`);
+  // Port direction follows the OS data flow + ownership (confirmed on hardware —
+  // the engine rejects rendering to a capture endpoint):
+  //  - render endpoint (speaker / virtual cable input) → SINK (route into it);
+  //  - capture endpoint → SOURCE you read from …EXCEPT
+  //  - OUR Nodus virtual mic — we own the driver and feed it via its render side
+  //    (engine t4) → SINK.
+  // A third-party virtual mic is a read-only capture endpoint: you can't render
+  // into it, so it must stay a source.
+  const micSink = isVirtual && isInput && isOwn;
+  const hasOutput = isInput && !micSink;
   const kind: NodeModel['kind'] = isVirtual ? 'virtual' : isInput ? 'source' : 'output';
   const side = hasOutput ? 'left' : 'right';
   return {
