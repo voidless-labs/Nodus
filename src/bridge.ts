@@ -78,12 +78,61 @@ export interface VirtualSetupStatus {
 /** volume-levels payload: keyed by device id OR exe name → level 0..1. */
 export type VolumeLevels = Record<string, number>;
 
-export type NodusEvent = 'audio-devices-changed' | 'process-changed' | 'volume-levels';
+export type NodusEvent =
+  | 'audio-devices-changed'
+  | 'process-changed'
+  | 'volume-levels'
+  | 'engine-state';
 
 // ── Runtime detection + lazy Tauri API ──────────────────────────────────────
 
 export const isTauri =
   typeof window !== 'undefined' && '__TAURI_IPC__' in (window as unknown as Record<string, unknown>);
+
+// ── Web daemon transport (t17 phase A) ──────────────────────────────────────
+// When NOT running inside Tauri, the UI can still drive a real engine by talking
+// to the embedded Nodus daemon over HTTP (/rpc) + WebSocket (/ws). The daemon
+// address is taken from (in order) the URL `?daemon=` param, the VITE_NODUS_DAEMON
+// env var, or localStorage 'nodus.daemon'. The token comes from `?token=`,
+// VITE_NODUS_TOKEN, or localStorage 'nodus.token'. Accepts `host:port`,
+// `http://host:port`, or `ws://host:port`. No daemon configured → the old browser
+// behaviour (commands resolve to null, listeners are no-ops, sample data).
+
+interface DaemonCfg {
+  http: string;
+  ws: string;
+  token: string;
+}
+
+function readDaemonCfg(): DaemonCfg | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const env = (import.meta as unknown as { env?: Record<string, string> }).env ?? {};
+  const ls = (key: string) => {
+    try {
+      return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    } catch {
+      return null;
+    }
+  };
+  const raw = params.get('daemon') || env.VITE_NODUS_DAEMON || ls('nodus.daemon') || '';
+  if (!raw) return null;
+  const secure = /^(https|wss):/i.test(raw);
+  const host = raw
+    .replace(/^wss?:\/\//i, '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+  const token = params.get('token') || env.VITE_NODUS_TOKEN || ls('nodus.token') || '';
+  return {
+    http: `${secure ? 'https' : 'http'}://${host}`,
+    ws: `${secure ? 'wss' : 'ws'}://${host}`,
+    token,
+  };
+}
+
+const _daemon: DaemonCfg | null = !isTauri ? readDaemonCfg() : null;
+/** True when this browser session is wired to a live Nodus daemon (t17). */
+export const isDaemon = _daemon !== null;
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 type ListenFn = (
@@ -113,9 +162,89 @@ async function getListen(): Promise<ListenFn | null> {
 }
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
-  const fn = await getInvoke();
-  if (!fn) return null;
-  return (await fn(cmd, args)) as T;
+  if (isTauri) {
+    const fn = await getInvoke();
+    if (!fn) return null;
+    return (await fn(cmd, args)) as T;
+  }
+  if (_daemon) {
+    const url = `${_daemon.http}/rpc${_daemon.token ? `?token=${encodeURIComponent(_daemon.token)}` : ''}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd, args: args ?? {} }),
+    });
+    if (!res.ok) throw new Error(`rpc ${cmd}: HTTP ${res.status}`);
+    const data = (await res.json()) as { ok?: boolean; result?: unknown; error?: string };
+    if (data.ok === false) throw new Error(data.error || `rpc ${cmd} failed`);
+    return (data.result ?? null) as T;
+  }
+  return null;
+}
+
+// ── Daemon WebSocket: a single shared connection fanned out to all listeners ──
+
+type WsHandler = (payload: unknown) => void;
+const _wsHandlers = new Map<string, Set<WsHandler>>();
+let _ws: WebSocket | null = null;
+let _wsRetry: ReturnType<typeof setTimeout> | null = null;
+
+function ensureWs(): void {
+  if (!_daemon || _ws) return;
+  const url = `${_daemon.ws}/ws${_daemon.token ? `?token=${encodeURIComponent(_daemon.token)}` : ''}`;
+  try {
+    const ws = new WebSocket(url);
+    _ws = ws;
+    ws.onmessage = (ev) => {
+      try {
+        const { event, payload } = JSON.parse(ev.data as string) as {
+          event: string;
+          payload: unknown;
+        };
+        _wsHandlers.get(event)?.forEach((h) => h(payload));
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    ws.onclose = () => {
+      _ws = null;
+      if (_wsHandlers.size) scheduleWsRetry();
+    };
+    ws.onerror = () => {
+      try {
+        ws.close();
+      } catch {
+        /* noop */
+      }
+    };
+  } catch {
+    _ws = null;
+    scheduleWsRetry();
+  }
+}
+
+function scheduleWsRetry(): void {
+  if (_wsRetry) return;
+  _wsRetry = setTimeout(() => {
+    _wsRetry = null;
+    ensureWs();
+  }, 1500);
+}
+
+function daemonListen(event: string, handler: WsHandler): () => void {
+  let set = _wsHandlers.get(event);
+  if (!set) {
+    set = new Set();
+    _wsHandlers.set(event, set);
+  }
+  set.add(handler);
+  ensureWs();
+  return () => {
+    const s = _wsHandlers.get(event);
+    if (!s) return;
+    s.delete(handler);
+    if (!s.size) _wsHandlers.delete(event);
+  };
 }
 
 // ── Generic event channel (used by the quick-controls flyout ↔ main, t13) ────
@@ -133,14 +262,18 @@ export async function emitEvent(event: string, payload?: unknown): Promise<void>
   await _emit(event, payload);
 }
 
-/** Listen to any Tauri event by name. Returns an unsubscribe fn (no-op in browser). */
+/** Listen to any event by name. Returns an unsubscribe fn (no-op when offline). */
 export async function listenAny<T>(
   event: string,
   handler: (payload: T) => void,
 ): Promise<() => void> {
-  const listen = await getListen();
-  if (!listen) return () => {};
-  return listen(event, (e) => handler(e.payload as T));
+  if (isTauri) {
+    const listen = await getListen();
+    if (!listen) return () => {};
+    return listen(event, (e) => handler(e.payload as T));
+  }
+  if (_daemon) return daemonListen(event, (p) => handler(p as T));
+  return () => {};
 }
 
 /** Which Tauri window this document is (by ?w= query). 'quick' = the flyout. */
@@ -186,6 +319,12 @@ export function stopEngine(): Promise<unknown> {
   return call('stop_engine');
 }
 
+/** Whether the shared engine is currently running (read on mount; live updates
+ *  arrive via the `engine-state` event). False when there is no live backend. */
+export async function isEngineRunning(): Promise<boolean> {
+  return (await call<boolean>('is_engine_running')) ?? false;
+}
+
 export async function getVirtualSetupStatus(): Promise<VirtualSetupStatus> {
   return (
     (await call<VirtualSetupStatus>('get_virtual_setup_status')) ?? {
@@ -213,6 +352,83 @@ export function setFlyoutPinned(pinned: boolean): Promise<unknown> {
  *  the main window is hidden to the tray (its own JS is throttled while hidden). */
 export function showMainWindow(): Promise<unknown> {
   return call('show_main_window');
+}
+
+/** Daemon URL + token to open the Web-UI / hand to Claude-preview (t17). Tauri only. */
+export interface ServerInfo {
+  url: string;
+  token: string;
+}
+export async function getServerInfo(): Promise<ServerInfo | null> {
+  if (!isTauri) return null;
+  return call<ServerInfo>('get_server_info');
+}
+
+// ── Scene sync (t17 phase B) ─────────────────────────────────────────────────
+// The workspace document `{ tabs, activeId }` lives in the daemon as the single
+// source of truth. A client pushes the whole document after a local mutation;
+// the daemon persists + broadcasts `scene:snapshot` so the other UI mirrors it.
+
+/** The daemon's workspace document + monotonic revision (+ origin on broadcasts). */
+export interface SceneSnapshot {
+  doc: unknown;
+  rev: number;
+  origin?: string | null;
+}
+
+/** Pull the current workspace document (null when there is no live backend). */
+export async function getScene(): Promise<SceneSnapshot | null> {
+  if (!isTauri && !_daemon) return null;
+  return call<SceneSnapshot>('get_scene');
+}
+
+/** Push the whole workspace document; returns the new revision (or null offline). */
+export async function pushScene(doc: unknown, origin: string): Promise<number | null> {
+  if (!isTauri && !_daemon) return null;
+  const r = await call<{ rev: number } | number>('push_scene', { doc, origin });
+  if (r == null) return null;
+  return typeof r === 'number' ? r : r.rev;
+}
+
+// ── Settings (t14) ────────────────────────────────────────────────────────────
+// Mirrored + persisted in the daemon like the scene; field names match the Rust
+// serde shape (snake_case). Broadcast as `settings:changed`.
+
+export interface Settings {
+  // performance (live)
+  vu_enabled: boolean;
+  vu_fps: number;
+  process_scan_secs: number;
+  // server / browser access (applied at next launch)
+  server_port: number;
+  server_lan: boolean;
+  // app behavior
+  start_engine_on_launch: boolean;
+  close_to_tray: boolean;
+  start_with_windows: boolean;
+}
+
+/** Defaults mirroring Rust `Settings::default()` — used before hydrate / offline. */
+export const DEFAULT_SETTINGS: Settings = {
+  vu_enabled: true,
+  vu_fps: 15,
+  process_scan_secs: 2,
+  server_port: 7878,
+  server_lan: false,
+  start_engine_on_launch: false,
+  close_to_tray: true,
+  start_with_windows: false,
+};
+
+export async function getSettings(): Promise<Settings | null> {
+  if (!isTauri && !_daemon) return null;
+  return call<Settings>('get_settings');
+}
+
+/** Replace settings; persists + broadcasts + applies side effects. Returns normalised. */
+export async function setSettings(next: Settings): Promise<Settings | null> {
+  if (!isTauri && !_daemon) return null;
+  return call<Settings>('set_settings', { next });
 }
 
 // ── Window controls (custom title bar) ──────────────────────────────────────
@@ -279,12 +495,16 @@ export async function onWinResize(cb: () => void): Promise<() => void> {
 
 // ── Events ──────────────────────────────────────────────────────────────────
 
-/** Subscribe to a backend event. Returns an unsubscribe fn (no-op in browser). */
+/** Subscribe to a backend event. Returns an unsubscribe fn (no-op when offline). */
 export async function listenToEvent<T>(
   event: NodusEvent,
   handler: (payload: T) => void,
 ): Promise<() => void> {
-  const listen = await getListen();
-  if (!listen) return () => {};
-  return listen(event, (e) => handler(e.payload as T));
+  if (isTauri) {
+    const listen = await getListen();
+    if (!listen) return () => {};
+    return listen(event, (e) => handler(e.payload as T));
+  }
+  if (_daemon) return daemonListen(event, (p) => handler(p as T));
+  return () => {};
 }

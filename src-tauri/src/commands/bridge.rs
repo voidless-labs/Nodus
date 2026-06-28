@@ -5,10 +5,7 @@
 /// - State lives in tauri::State wrappers, registered in main.rs
 /// - Events are emitted on the AppHandle
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager, State};
 use tracing::{error, info};
@@ -30,22 +27,26 @@ use crate::{
 // slow operations move onto a blocking thread without holding a global engine lock.
 pub struct EngineState(pub Arc<RoutingEngine>);
 pub struct DetectorState(pub Mutex<ProcessDetector>);
+/// The shared workspace document (scenes) — single source of truth for both UIs
+/// (t17 phase B). Same Arc the daemon's /rpc dispatcher uses.
+pub struct SceneState(pub Arc<crate::server::scene_store::SceneStore>);
+/// Shared application settings (t14) — mirrored + persisted like the scene.
+pub struct SettingsState(pub Arc<crate::server::settings_store::SettingsStore>);
 
 // ── Device commands ────────────────────────────────────────────────────────
 
-/// Return all audio devices (input + output + detected virtual).
-/// VB-Audio CABLE devices are returned with Nodus-branded names.
-#[tauri::command]
-pub async fn get_audio_devices(
-    _engine: State<'_, EngineState>,
-) -> Result<Vec<AudioDevice>, String> {
+/// Enumerate audio devices and upgrade render-side virtual endpoints to Virtual.
+/// Shared by the Tauri command and the daemon's /rpc dispatcher (t17) so both
+/// return identical device lists. Blocking (COM + WASAPI) — call off the async
+/// runtime (spawn_blocking) when invoked from async contexts.
+///
+/// Only render endpoints (Output) become Virtual — capture endpoints (Input) stay
+/// Input. CABLE Input is a render endpoint → Virtual (shown as Output target in
+/// UI); CABLE Output is a capture endpoint → stays Input (not a render target).
+pub fn list_devices_full() -> Result<Vec<AudioDevice>, String> {
     let _com = ComGuard::init().map_err(|e| e.to_string())?;
     let mut devices = enumerate_audio_devices().map_err(|e| e.to_string())?;
 
-    // Upgrade virtual devices to Virtual type.
-    // Only render endpoints (Output) become Virtual — capture endpoints (Input) stay as Input.
-    // CABLE Input is a render endpoint → Virtual (shown as Output target in UI).
-    // CABLE Output is a capture endpoint → stays Input (not a render target).
     let virtual_status = query_virtual_status(&devices);
     for vd in &virtual_status.devices {
         if let Some(d) = devices.iter_mut().find(|d| d.id == vd.id) {
@@ -56,6 +57,15 @@ pub async fn get_audio_devices(
     }
 
     Ok(devices)
+}
+
+/// Return all audio devices (input + output + detected virtual).
+/// VB-Audio CABLE devices are returned with Nodus-branded names.
+#[tauri::command]
+pub async fn get_audio_devices(
+    _engine: State<'_, EngineState>,
+) -> Result<Vec<AudioDevice>, String> {
+    list_devices_full()
 }
 
 /// Return the current virtual device setup status (NotFound / VbAudio / NodusDriver).
@@ -146,6 +156,14 @@ pub async fn start_engine(engine: State<'_, EngineState>) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
+/// Whether the routing engine is currently running. Clients read this on mount /
+/// reconnect to initialise the Engine button; live changes arrive via the
+/// `engine-state` event (t17).
+#[tauri::command]
+pub fn is_engine_running(engine: State<'_, EngineState>) -> bool {
+    engine.0.is_running()
+}
+
 /// Stop the routing engine (WASAPI teardown → blocking thread).
 #[tauri::command]
 pub async fn stop_engine(engine: State<'_, EngineState>) -> Result<(), String> {
@@ -156,23 +174,74 @@ pub async fn stop_engine(engine: State<'_, EngineState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ── Scene sync (t17 phase B) ─────────────────────────────────────────────────
+
+/// Return the current workspace document + revision (single source of truth).
+#[tauri::command]
+pub fn get_scene(
+    scene: State<'_, SceneState>,
+) -> crate::server::scene_store::SceneSnapshot {
+    scene.0.snapshot()
+}
+
+/// Replace the workspace document; persists + broadcasts `scene:snapshot` to the
+/// other UIs. `origin` is the caller's client id so it can ignore its own echo.
+/// Returns the new revision.
+#[tauri::command]
+pub fn push_scene(
+    doc: serde_json::Value,
+    origin: Option<String>,
+    scene: State<'_, SceneState>,
+) -> u64 {
+    scene.0.push(doc, origin)
+}
+
+// ── Settings (t14) ───────────────────────────────────────────────────────────
+
+/// Return the current application settings.
+#[tauri::command]
+pub fn get_settings(
+    settings: State<'_, SettingsState>,
+) -> crate::server::settings_store::Settings {
+    settings.0.get()
+}
+
+/// Replace application settings; persists + broadcasts `settings:changed` to the
+/// other UIs and applies side effects (e.g. Windows autostart). Returns normalised.
+#[tauri::command]
+pub fn set_settings(
+    next: crate::server::settings_store::Settings,
+    settings: State<'_, SettingsState>,
+) -> crate::server::settings_store::Settings {
+    settings.0.set(next)
+}
+
 // ── Background tasks ───────────────────────────────────────────────────────
 
-/// Spawn background tasks that emit events to the UI.
-/// State must already be managed (done in main.rs Builder::manage).
-pub fn setup_background_tasks(handle: AppHandle) {
-    // Process detector — emits "process-changed" every 2 seconds when list changes.
-    // The ProcessDetector's background thread holds Arc refs, so dropping the
-    // local detector here is fine — the thread runs until process exit.
+/// Spawn background tasks that publish events onto the daemon `bus` (t17).
+///
+/// Single producer → one bus → two consumers: a forwarder in main.rs mirrors the
+/// bus to `emit_all` (desktop webview) while each WS connection mirrors it to its
+/// socket (Web-UI / Claude-preview). This same path also carries `scene:snapshot`
+/// (Phase B), so a scene change from a web client reaches the desktop too.
+pub fn setup_background_tasks(
+    handle: AppHandle,
+    bus: crate::server::EventBus,
+    settings: Arc<crate::server::settings_store::SettingsStore>,
+) {
+    // Process detector — publishes "process-changed" when the list changes. Interval
+    // comes from settings (applied at launch). The ProcessDetector's background thread
+    // holds Arc refs, so dropping the local detector here is fine.
     {
-        let handle_proc = handle.clone();
+        let bus_proc = bus.clone();
         let detector = ProcessDetector::new();
-        detector.start(Duration::from_secs(2), move |procs| {
+        detector.start(settings.get().scan_interval(), move |procs| {
             match serde_json::to_value(&procs) {
                 Ok(payload) => {
-                    if let Err(e) = handle_proc.emit_all("process-changed", payload) {
-                        error!("failed to emit process-changed: {e}");
-                    }
+                    let _ = bus_proc.send(crate::server::ServerEvent {
+                        event: "process-changed".into(),
+                        payload,
+                    });
                 }
                 Err(e) => error!("failed to serialize process list: {e}"),
             }
@@ -180,38 +249,65 @@ pub fn setup_background_tasks(handle: AppHandle) {
         // detector drops here; background thread is kept alive by its own Arc refs
     }
 
-    // Emit initial device list on a background thread
-    let handle_dev = handle.clone();
+    // Publish the initial device list on a background thread.
+    let bus_dev = bus.clone();
     std::thread::spawn(move || {
-        if let Ok(_com) = ComGuard::init() {
-            match enumerate_audio_devices() {
-                Ok(devices) => {
-                    if let Ok(payload) = serde_json::to_value(&devices) {
-                        let _ = handle_dev.emit_all("audio-devices-changed", payload);
-                    }
+        // Use the shared helper so the startup event carries the same Virtual
+        // upgrades as get_audio_devices / the /rpc dispatcher.
+        match list_devices_full() {
+            Ok(devices) => {
+                if let Ok(payload) = serde_json::to_value(&devices) {
+                    let _ = bus_dev.send(crate::server::ServerEvent {
+                        event: "audio-devices-changed".into(),
+                        payload,
+                    });
                 }
-                Err(e) => error!("failed to enumerate devices on startup: {e}"),
             }
+            Err(e) => error!("failed to enumerate devices on startup: {e}"),
         }
     });
 
-    // VU meter — emits "volume-levels" at ~15fps when engine is running, and only
-    // when the levels actually changed: every event triggers a WebView repaint,
+    // VU meter — publishes "volume-levels" at ~15fps when the engine is running, and
+    // only when the levels actually changed: every event triggers a WebView repaint,
     // which is expensive on weak GPUs (Pentium N4200 field test: WebView2 GPU
     // process at ~27% CPU). Payload: {device_id: level_0_to_1}.
     let handle_levels = handle.clone();
+    let bus_levels = bus.clone();
+    let settings_levels = settings.clone();
     std::thread::spawn(move || {
         let mut prev: std::collections::HashMap<String, f32> = Default::default();
+        let mut was_running = false;
+        let publish = |payload: serde_json::Value, bus: &crate::server::EventBus| {
+            let _ = bus.send(crate::server::ServerEvent {
+                event: "volume-levels".into(),
+                payload,
+            });
+        };
         loop {
-            std::thread::sleep(Duration::from_millis(66));
+            // VU refresh rate is configurable live (t14): re-read each iteration.
+            let cfg = settings_levels.get();
+            std::thread::sleep(cfg.vu_interval());
             let engine = handle_levels.state::<EngineState>();
             // Engine is lock-free to query now; get_levels takes only the
             // short-lived internal captures/routes locks.
-            if !engine.0.is_running() {
+            let running = engine.0.is_running();
+            // Broadcast engine on/off transitions so EVERY client's Engine button
+            // stays in sync — the engine is a single shared instance, so its state
+            // is the source of truth, not any one UI's local flag (t17).
+            if running != was_running {
+                was_running = running;
+                let _ = bus_levels.send(crate::server::ServerEvent {
+                    event: "engine-state".into(),
+                    payload: serde_json::json!(running),
+                });
+            }
+            // VU disabled (t14) or engine stopped → make sure meters are zeroed once,
+            // then idle. Engine-state above still flows so the button stays in sync.
+            if !running || !cfg.vu_enabled {
                 if !prev.is_empty() {
-                    prev.clear(); // engine stopped — let the UI zero the meters
+                    prev.clear();
                     if let Ok(payload) = serde_json::to_value(&prev) {
-                        let _ = handle_levels.emit_all("volume-levels", payload);
+                        publish(payload, &bus_levels);
                     }
                 }
                 continue;
@@ -223,7 +319,7 @@ pub fn setup_background_tasks(handle: AppHandle) {
                     .any(|(k, v)| (prev.get(k).copied().unwrap_or(-1.0) - v).abs() > 0.01);
             if changed {
                 if let Ok(payload) = serde_json::to_value(&levels) {
-                    let _ = handle_levels.emit_all("volume-levels", payload);
+                    publish(payload, &bus_levels);
                 }
                 prev = levels;
             }

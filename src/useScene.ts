@@ -4,8 +4,14 @@ import {
   setRouteMute as bridgeSetRouteMute,
   setRoutePan as bridgeSetRoutePan,
   setRouteVolume as bridgeSetRouteVolume,
+  getScene,
+  isDaemon,
+  isTauri,
+  listenAny,
+  pushScene,
   type AudioDevice,
   type AudioProcess,
+  type SceneSnapshot,
 } from './bridge';
 import { buildRoutingGraph } from './routingGraph';
 import { EMPTY_SCENE, buildPreset, type PresetId, type Scene } from './scenes';
@@ -245,6 +251,17 @@ interface SceneTab {
   data: Scene;
 }
 
+// A live backend (Tauri or the web daemon) owns the scene document; without one
+// the store is purely local (browser preview). (t17 phase B)
+const HAS_BACKEND = isTauri || isDaemon;
+const SCENE_PUSH_DEBOUNCE_MS = 250;
+
+/** The whole workspace, mirrored through the daemon as the single source of truth. */
+interface WorkspaceDoc {
+  tabs: SceneTab[];
+  activeId: string;
+}
+
 let _sid = 0;
 const newSceneId = () => `scene-${Date.now().toString(36)}-${(_sid++).toString(36)}`;
 
@@ -258,6 +275,17 @@ export function useScene(live: boolean): SceneStore {
   const [activeId, setActiveId] = useState('scene-1');
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+
+  // ── Scene-sync refs (t17 phase B) ──────────────────────────────────────
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const clientIdRef = useRef(Math.random().toString(36).slice(2));
+  const revRef = useRef(0);
+  const syncedRef = useRef(false);
+  // JSON of the document we last pushed OR applied — diffed to suppress our own
+  // echo and no-op renders.
+  const lastSyncRef = useRef('');
+  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
   const scene = active.data;
@@ -294,6 +322,91 @@ export function useScene(live: boolean): SceneStore {
   useEffect(
     () => () => {
       if (timer.current != null) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  // ── Scene sync: the daemon is the source of truth (t17 phase B) ─────────
+  // Hydrate from the daemon on mount and apply remote snapshots; the push effect
+  // below mirrors local changes back. Without a backend the store stays purely
+  // local (browser preview), so the designer can still work offline.
+  useEffect(() => {
+    if (!HAS_BACKEND) return;
+    let cancelled = false;
+    let unsub = () => {};
+
+    const isDoc = (d: unknown): d is WorkspaceDoc =>
+      !!d && typeof d === 'object' && Array.isArray((d as WorkspaceDoc).tabs);
+    // Apply a remote document: cancel any pending local push (remote wins), record
+    // it as the last synced state, then swap in the tabs + active scene. React 18
+    // batches these two setState calls into one render, so the push effect sees the
+    // final state == lastSyncRef and skips, avoiding an echo back to the daemon.
+    const applyDoc = (doc: WorkspaceDoc) => {
+      if (pushTimerRef.current) {
+        clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = null;
+      }
+      lastSyncRef.current = JSON.stringify({ tabs: doc.tabs, activeId: doc.activeId });
+      setTabs(doc.tabs);
+      setActiveId(doc.activeId);
+    };
+
+    (async () => {
+      const snap = await getScene();
+      if (cancelled) return;
+      if (snap && isDoc(snap.doc) && snap.doc.tabs.length) {
+        revRef.current = snap.rev;
+        applyDoc(snap.doc);
+      } else if (snap) {
+        // Server has no scene yet → seed it with our current local state.
+        revRef.current = snap.rev;
+        const doc = { tabs: tabsRef.current, activeId: activeIdRef.current };
+        lastSyncRef.current = JSON.stringify(doc);
+        const rev = await pushScene(doc, clientIdRef.current);
+        if (typeof rev === 'number') revRef.current = Math.max(revRef.current, rev);
+      }
+      syncedRef.current = true;
+
+      unsub = await listenAny<SceneSnapshot>('scene:snapshot', (s) => {
+        if (!s) return;
+        if (s.origin && s.origin === clientIdRef.current) {
+          revRef.current = Math.max(revRef.current, s.rev); // our own echo
+          return;
+        }
+        if (s.rev <= revRef.current) return; // stale
+        if (!isDoc(s.doc)) return;
+        revRef.current = s.rev;
+        applyDoc(s.doc);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mirror local changes to the daemon (debounced). Diff against lastSyncRef so a
+  // just-applied remote snapshot doesn't bounce straight back.
+  useEffect(() => {
+    if (!HAS_BACKEND || !syncedRef.current) return;
+    const json = JSON.stringify({ tabs, activeId });
+    if (json === lastSyncRef.current) return;
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      lastSyncRef.current = json;
+      void pushScene(JSON.parse(json) as WorkspaceDoc, clientIdRef.current)
+        .then((rev) => {
+          if (typeof rev === 'number') revRef.current = Math.max(revRef.current, rev);
+        })
+        .catch((e) => console.error('push_scene:', e));
+    }, SCENE_PUSH_DEBOUNCE_MS);
+  }, [tabs, activeId]);
+
+  useEffect(
+    () => () => {
+      if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current);
     },
     [],
   );

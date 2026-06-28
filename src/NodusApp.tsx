@@ -9,10 +9,12 @@ import { ZoomControls } from './ui/ZoomControls';
 import { AddPanel } from './ui/AddPanel';
 import { EmptyCanvas } from './ui/EmptyCanvas';
 import { VirtualDeviceModal } from './ui/VirtualDeviceModal';
+import { SettingsModal } from './ui/SettingsModal';
 import { SelectionBar } from './ui/SelectionBar';
 import { QuickPanel, type QuickItem } from './ui/QuickPanel';
 import { useBackend } from './useBackend';
 import { useScene } from './useScene';
+import { useSettings } from './useSettings';
 import { useView } from './useView';
 import { usePlaceDrag, type PlacePayload } from './usePlaceDrag';
 import { bindScene, buildPreset, type PresetId } from './scenes';
@@ -33,7 +35,9 @@ export default function NodusApp() {
   const backend = useBackend();
   const store = useScene(backend.live);
   const { scene } = store;
+  const settingsCtl = useSettings();
   const [setupOpen, setSetupOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const canvasAreaRef = useRef<HTMLDivElement>(null);
   const viewCtl = useView(canvasAreaRef);
@@ -108,6 +112,19 @@ export default function NodusApp() {
   // Turning the engine on starts it, then pushes the current graph (proven order).
   const toggleLive = () => backend.setLive(!backend.live, store.applyNow);
   const fitAll = () => viewCtl.fit([...scene.nodes, ...scene.hubs]);
+
+  // Start the engine on launch if the setting asks for it (t14). Once, after both
+  // settings and backend are ready, and only when the engine isn't already live.
+  const autostartedRef = useRef(false);
+  useEffect(() => {
+    if (autostartedRef.current) return;
+    if (!settingsCtl.ready || !backend.ready) return;
+    autostartedRef.current = true; // decide once
+    if (settingsCtl.settings.start_engine_on_launch && !backend.live) {
+      backend.setLive(true, store.applyNow);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsCtl.ready, backend.ready]);
 
   // ── Quick-controls popup (t13, Phase A) ───────────────────────────────────
   // Pinned set drives the pin button on each node; the popup lists pinned nodes.
@@ -302,6 +319,7 @@ export default function NodusApp() {
         onAdd={store.newScene}
         onClose={store.closeScene}
         onRename={store.renameScene}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="canvas-area" ref={canvasAreaRef}>
         <Canvas view={viewCtl.view}>
@@ -384,6 +402,13 @@ export default function NodusApp() {
           onBeginPlace={place.begin}
         />
         {setupOpen && <VirtualDeviceModal onClose={() => setSetupOpen(false)} />}
+        {settingsOpen && (
+          <SettingsModal
+            settings={settingsCtl.settings}
+            onUpdate={settingsCtl.update}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
       </div>
       {quickOpen && (
         <QuickPanel

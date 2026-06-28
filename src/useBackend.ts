@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getAudioDevices,
   getRunningAudioProcesses,
+  isDaemon,
+  isEngineRunning,
   isTauri,
   listenToEvent,
   startEngine,
@@ -10,6 +12,10 @@ import {
   type AudioProcess,
   type VolumeLevels,
 } from './bridge';
+
+// A live backend is available either in the Tauri runtime OR over the web daemon
+// (t17). Only when neither is present do we fall back to sample data.
+const HAS_BACKEND = isTauri || isDaemon;
 
 /**
  * useBackend — the live data layer (R3).
@@ -72,8 +78,8 @@ export function useBackend(): Backend {
   useEffect(() => {
     let cancelled = false;
 
-    if (!isTauri) {
-      // Browser preview: sample data, no live engine.
+    if (!HAS_BACKEND) {
+      // Plain browser preview (no daemon): sample data, no live engine.
       setDevices(SAMPLE_DEVICES);
       setProcesses(SAMPLE_PROCESSES);
       setReady(true);
@@ -81,16 +87,26 @@ export function useBackend(): Backend {
     }
 
     (async () => {
-      const [devs, procs] = await Promise.all([getAudioDevices(), getRunningAudioProcesses()]);
+      const [devs, procs, running] = await Promise.all([
+        getAudioDevices(),
+        getRunningAudioProcesses(),
+        isEngineRunning(),
+      ]);
       if (cancelled) return;
       setDevices(devs);
       setProcesses(procs);
+      // Init the Engine button from the shared engine, not a local default — a
+      // client joining while the engine already runs must show "live" (t17).
+      setLiveState(running);
       setReady(true);
 
       unsubs.current.push(
         await listenToEvent<AudioDevice[]>('audio-devices-changed', (d) => setDevices(d)),
         await listenToEvent<AudioProcess[]>('process-changed', (p) => setProcesses(p)),
         await listenToEvent<VolumeLevels>('volume-levels', (l) => setLevels(l ?? {})),
+        // Engine on/off driven by the engine itself → every client stays in sync.
+        // Raw setter (no start/stop call) so this can't loop with the broadcaster.
+        await listenToEvent<boolean>('engine-state', (on) => setLiveState(!!on)),
       );
     })();
 
@@ -103,7 +119,7 @@ export function useBackend(): Backend {
 
   const setLive = useCallback((on: boolean, onStarted?: () => void) => {
     setLiveState(on);
-    if (!isTauri) return;
+    if (!HAS_BACKEND) return;
     if (on) {
       // Start the engine, then push the current routing graph (proven order).
       startEngine()

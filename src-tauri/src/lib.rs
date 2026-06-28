@@ -3,3 +3,4 @@ pub mod audio;
 pub mod commands;
 pub mod detection;
 pub mod routing;
+pub mod server;

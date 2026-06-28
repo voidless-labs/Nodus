@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use nodus::commands::bridge::{DetectorState, EngineState};
+use nodus::commands::bridge::{DetectorState, EngineState, SettingsState};
 use nodus::detection::process::ProcessDetector;
 use nodus::routing::engine::RoutingEngine;
 use tauri::{
@@ -37,6 +37,12 @@ fn set_flyout_pinned(pinned: bool) {
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
     show_main(&app);
+}
+
+/// UI → Rust: the daemon URL + token to paste into a browser / hand to preview (t17).
+#[tauri::command]
+fn get_server_info(info: tauri::State<'_, nodus::server::ServerInfo>) -> nodus::server::ServerInfo {
+    info.inner().clone()
 }
 
 fn now_millis() -> u64 {
@@ -108,6 +114,12 @@ fn main() {
             nodus::commands::bridge::is_test_signing_enabled,
             set_flyout_pinned,
             show_main_window,
+            get_server_info,
+            nodus::commands::bridge::get_scene,
+            nodus::commands::bridge::push_scene,
+            nodus::commands::bridge::is_engine_running,
+            nodus::commands::bridge::get_settings,
+            nodus::commands::bridge::set_settings,
         ])
         .system_tray(build_tray())
         .on_system_tray_event(|app, event| match event {
@@ -160,8 +172,15 @@ fn main() {
             let win = event.window();
             match event.event() {
                 WindowEvent::CloseRequested { api, .. } => {
-                    let _ = win.hide();
-                    api.prevent_close();
+                    // Main window: honor the "close to tray" setting (t14) — when off,
+                    // closing it really quits. The flyout always just hides.
+                    let close_to_tray = win.state::<SettingsState>().0.get().close_to_tray;
+                    if win.label() == "main" && !close_to_tray {
+                        // let the close proceed → app exits
+                    } else {
+                        let _ = win.hide();
+                        api.prevent_close();
+                    }
                 }
                 // The quick-controls flyout dismisses itself when it loses focus
                 // (click outside it). Unless it's pinned — then it stays open and
@@ -178,7 +197,87 @@ fn main() {
         })
         .setup(|app| {
             let handle = app.handle();
-            nodus::commands::bridge::setup_background_tasks(handle);
+
+            // Daemon event bus (t17): one producer (the background tasks), many
+            // consumers (the desktop webview via emit_all + each WS client).
+            let (bus, _rx) = tokio::sync::broadcast::channel::<nodus::server::ServerEvent>(128);
+
+            // Forwarder: mirror every bus event to the desktop webview via emit_all.
+            // The other consumer is each WS connection. This single path also carries
+            // scene:snapshot, so a web client's scene edit reaches the desktop (Phase B).
+            {
+                let fwd_handle = handle.clone();
+                let mut fwd_rx = bus.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    while let Ok(ev) = fwd_rx.recv().await {
+                        let _ = fwd_handle.emit_all(&ev.event, ev.payload);
+                    }
+                });
+            }
+
+            // Persisted stores under the app config dir (t14 + t17 phase B), shared by
+            // the Tauri commands and the daemon. Settings is created first so the
+            // background tasks + server bind can read it.
+            let config_dir = app.path_resolver().app_config_dir();
+            let settings = std::sync::Arc::new(nodus::server::settings_store::SettingsStore::new(
+                config_dir.as_ref().map(|d| d.join("settings.json")),
+                bus.clone(),
+            ));
+            app.manage(nodus::commands::bridge::SettingsState(settings.clone()));
+            let cfg = settings.get();
+
+            nodus::commands::bridge::setup_background_tasks(
+                handle.clone(),
+                bus.clone(),
+                settings.clone(),
+            );
+
+            // Embedded HTTP/WS daemon — exposes the live engine to the Web-UI and
+            // Claude-preview. Shares the very same RoutingEngine the Tauri commands
+            // drive, so both transports control one engine.
+            let engine = app.state::<EngineState>().0.clone();
+            // Token policy: LAN access ALWAYS requires a token (it's reachable by other
+            // machines). Loopback dev builds drop it so tooling can connect with no
+            // secret; release loopback still generates one. (t14 + t17)
+            let token = if cfg.server_lan || !cfg!(debug_assertions) {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                String::new()
+            };
+            let host = if cfg.server_lan { "0.0.0.0" } else { "127.0.0.1" };
+            let port = cfg.server_port;
+            let url = format!("http://{host}:{port}");
+            if token.is_empty() {
+                info!("Nodus daemon: {url}  (dev build: auth disabled, loopback only)");
+            } else {
+                info!("Nodus daemon: {url}  token: {token}");
+            }
+            app.manage(nodus::server::ServerInfo {
+                url: url.clone(),
+                token: token.clone(),
+            });
+
+            let scene = std::sync::Arc::new(nodus::server::scene_store::SceneStore::new(
+                config_dir.as_ref().map(|d| d.join("workspace.json")),
+                bus.clone(),
+            ));
+            app.manage(nodus::commands::bridge::SceneState(scene.clone()));
+
+            let state = nodus::server::ServerState {
+                engine,
+                scene,
+                settings,
+                bus,
+                token,
+            };
+            let ip: std::net::IpAddr = if cfg.server_lan {
+                std::net::Ipv4Addr::UNSPECIFIED.into()
+            } else {
+                std::net::Ipv4Addr::LOCALHOST.into()
+            };
+            let addr = std::net::SocketAddr::new(ip, port);
+            tauri::async_runtime::spawn(nodus::server::serve(state, addr));
+
             Ok(())
         })
         .run(tauri::generate_context!())
