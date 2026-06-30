@@ -211,24 +211,36 @@ static NTSTATUS NodusIoctlListDevices(_In_opt_ PVOID Buffer, _In_ ULONG OutLen,
     out->Size              = sizeof(*out);
     out->MaxDynamicDevices = NODUS_MAX_DYNAMIC_DEVICES;
 
-    // Step 2: only the static pair exists (ADR §10 — it is "device 0", two
-    // entries, one per kind). Step 3 appends the dynamic table under the
-    // same mutex we already hold.
+    // The static pair is "device 0": two entries, one per kind (ADR §10).
     NodusFillStaticInfo(&out->Devices[0], NODUS_KIND_RENDER,  c_StaticSpeakerName);
     NodusFillStaticInfo(&out->Devices[1], NODUS_KIND_CAPTURE, c_StaticMicName);
-    out->Count = 2;
+    ULONG count = 2;
+
+    // Append the dynamic table (we hold the mutex). 2 static + up to 8 dynamic
+    // fit in NODUS_TOTAL_DEVICE_SLOTS (10); the buffer was already zeroed.
+    for (ULONG id = 1; id <= NODUS_MAX_DYNAMIC_DEVICES; ++id) {
+        const NODUS_DYNAMIC_DEVICE* slot = &g_NodusAdapter.Dynamic[id - 1];
+        if (!slot->InUse) continue;
+        NODUS_DEVICE_INFO* info = &out->Devices[count];
+        info->Id    = id;
+        info->Kind  = slot->Kind;
+        info->Flags = 0;   // not static; ring-active is lazy and not tracked here
+        RtlStringCchCopyW(info->FriendlyName, NODUS_MAX_NAME_CCH, slot->Name);
+        ++count;
+    }
+    out->Count = count;
 
     *Information = sizeof(*out);
-    DbgPrint("Nodus: ioctl LIST_DEVICES -> count=%u (static only)\n", out->Count);
+    DbgPrint("Nodus: ioctl LIST_DEVICES -> count=%u (2 static + %u dynamic)\n", count, count - 2);
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS NodusIoctlCreateDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen, _In_ ULONG OutLen)
+static NTSTATUS NodusIoctlCreateDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen, _In_ ULONG OutLen,
+                                       _Out_ ULONG_PTR* Information)
 {
     PAGED_CODE();
 
-    // Full validation BEFORE any processing (ADR §9 item 5) so step 3 only
-    // replaces the tail of this function.
+    // Full validation BEFORE any processing (ADR §9 item 5).
     if (Buffer == nullptr ||
         InLen  < sizeof(NODUS_CREATE_DEVICE_INPUT) ||
         OutLen < sizeof(NODUS_CREATE_DEVICE_OUTPUT)) {
@@ -254,9 +266,36 @@ static NTSTATUS NodusIoctlCreateDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen, 
         return STATUS_INVALID_PARAMETER;
     }
 
-    DbgPrint("Nodus: ioctl CREATE_DEVICE kind=%u reqId=%u - not implemented yet (t5 step 3)\n",
-             in->Kind, in->RequestedId);
-    return STATUS_NOT_IMPLEMENTED;
+    // Pick the id: an explicit RequestedId (must be free) or the lowest free slot.
+    ULONG id = in->RequestedId;
+    if (id != 0) {
+        if (g_NodusAdapter.Dynamic[id - 1].InUse) {
+            DbgPrint("Nodus: CREATE id=%u already in use\n", id);
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+    } else {
+        for (ULONG i = 1; i <= NODUS_MAX_DYNAMIC_DEVICES; ++i) {
+            if (!g_NodusAdapter.Dynamic[i - 1].InUse) { id = i; break; }
+        }
+        if (id == 0) {
+            DbgPrint("Nodus: CREATE no free slot (all %u used)\n", NODUS_MAX_DYNAMIC_DEVICES);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    // Install the pair (reads in->FriendlyName before we overwrite the buffer below).
+    NTSTATUS status = NodusInstallDynamicDevice(id, in->Kind, in->FriendlyName);
+    if (!NT_SUCCESS(status)) {
+        return status;   // helper rolled back fully
+    }
+
+    NODUS_CREATE_DEVICE_OUTPUT* out = (NODUS_CREATE_DEVICE_OUTPUT*)Buffer;
+    RtlZeroMemory(out, sizeof(*out));
+    out->Size = sizeof(*out);
+    out->Id   = id;
+    *Information = sizeof(*out);
+    DbgPrint("Nodus: CREATE_DEVICE -> id=%u kind=%u\n", id, in->Kind);
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS NodusIoctlDestroyDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen)
@@ -274,12 +313,19 @@ static NTSTATUS NodusIoctlDestroyDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen)
         return STATUS_INVALID_PARAMETER;
     }
     if (in->Id == 0 || in->Id > NODUS_MAX_DYNAMIC_DEVICES) {
+        // id 0 is the static pair (never destroyable) — INVALID_PARAMETER per ADR.
         DbgPrint("Nodus: ioctl DESTROY_DEVICE rejected: Id=%u\n", in->Id);
         return STATUS_INVALID_PARAMETER;
     }
 
-    DbgPrint("Nodus: ioctl DESTROY_DEVICE id=%u - not implemented yet (t5 step 3)\n", in->Id);
-    return STATUS_NOT_IMPLEMENTED;
+    if (!g_NodusAdapter.Dynamic[in->Id - 1].InUse) {
+        DbgPrint("Nodus: DESTROY_DEVICE id=%u not found\n", in->Id);
+        return STATUS_NOT_FOUND;
+    }
+
+    NodusUninstallDynamicDevice(in->Id);
+    DbgPrint("Nodus: DESTROY_DEVICE -> id=%u\n", in->Id);
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS NodusHandleControl(_In_ PIRP Irp)
@@ -315,7 +361,7 @@ static NTSTATUS NodusHandleControl(_In_ PIRP Irp)
             status = NodusIoctlQueryVersion(buffer, outLen, &information);
             break;
         case IOCTL_NODUS_CREATE_DEVICE:
-            status = NodusIoctlCreateDevice(buffer, inLen, outLen);
+            status = NodusIoctlCreateDevice(buffer, inLen, outLen, &information);
             break;
         case IOCTL_NODUS_DESTROY_DEVICE:
             status = NodusIoctlDestroyDevice(buffer, inLen);
@@ -373,8 +419,10 @@ NTSTATUS NodusDispatchPnp(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
         if (g_NodusAdapter.Fdo == DeviceObject || g_NodusAdapter.Fdo == nullptr) {
             g_NodusAdapter.Removing = TRUE;
 
-            // t5 step 3: tear down all dynamic subdevice pairs here (same path
-            // as DESTROY) while the ports are still registered.
+            // Tear down all dynamic pairs while the audio FDO (and its ports) are
+            // still valid — BEFORE we forget the FDO below. Idempotent if a prior
+            // SURPRISE_REMOVAL already cleared the table.
+            NodusUninstallAllDynamic();
 
             if (minor == IRP_MN_REMOVE_DEVICE) {
                 g_NodusAdapter.Fdo = nullptr;
