@@ -108,6 +108,13 @@ VOID NodusControlDeleteDevice(VOID)
         g_NodusAdapter.ControlDevice = nullptr;
     }
     NodusUnlock();
+
+    if (g_RegistryPath.Buffer != nullptr) {
+        ExFreePoolWithTag(g_RegistryPath.Buffer, NODUS_POOL_TAG);
+        g_RegistryPath.Buffer = nullptr;
+        g_RegistryPath.Length = 0;
+        g_RegistryPath.MaximumLength = 0;
+    }
 }
 
 VOID NodusControlOnAddDevice(_In_ PDEVICE_OBJECT Pdo)
@@ -162,6 +169,140 @@ static BOOLEAN NodusNameIsValid(_In_reads_(NODUS_MAX_NAME_CCH) const WCHAR* Name
         }
     }
     return FALSE;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (S3.4). The dynamic table is mirrored to a single REG_BINARY value
+// "Devices" under <ServiceKey>\DynamicDevices: an array of {Id, Kind, Name}, the
+// current InUse slots. Rewritten whole on each CREATE/DESTROY; replayed once at
+// StartDevice so devices survive a reboot.
+// ---------------------------------------------------------------------------
+
+typedef struct _NODUS_PERSIST_RECORD {
+    ULONG Id;
+    ULONG Kind;
+    WCHAR Name[NODUS_MAX_NAME_CCH];
+} NODUS_PERSIST_RECORD;
+
+static UNICODE_STRING g_RegistryPath = { 0, 0, nullptr };
+
+VOID NodusControlSetRegistryPath(_In_ PUNICODE_STRING RegistryPath)
+{
+    PAGED_CODE();
+    if (RegistryPath == nullptr || RegistryPath->Length == 0 || RegistryPath->Buffer == nullptr) {
+        return;
+    }
+    const USHORT len = RegistryPath->Length;
+    PWCH buf = (PWCH)ExAllocatePool2(POOL_FLAG_PAGED, len, NODUS_POOL_TAG);
+    if (buf == nullptr) return;
+    RtlCopyMemory(buf, RegistryPath->Buffer, len);
+    g_RegistryPath.Buffer = buf;
+    g_RegistryPath.Length = len;
+    g_RegistryPath.MaximumLength = len;
+}
+
+// Open (optionally create) <ServiceKey>\DynamicDevices.
+static NTSTATUS NodusOpenDevicesKey(_In_ ACCESS_MASK Access, _In_ BOOLEAN Create, _Out_ PHANDLE OutKey)
+{
+    *OutKey = nullptr;
+    if (g_RegistryPath.Length == 0) return STATUS_UNSUCCESSFUL;
+
+    static const WCHAR sub[] = L"\\DynamicDevices";
+    const USHORT subBytes = sizeof(sub) - sizeof(WCHAR);   // exclude the NUL
+    const USHORT total = g_RegistryPath.Length + subBytes;
+    PWCH buf = (PWCH)ExAllocatePool2(POOL_FLAG_PAGED, total + sizeof(WCHAR), NODUS_POOL_TAG);
+    if (buf == nullptr) return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(buf, g_RegistryPath.Buffer, g_RegistryPath.Length);
+    RtlCopyMemory((PUCHAR)buf + g_RegistryPath.Length, sub, sizeof(sub));   // includes NUL
+
+    UNICODE_STRING path;
+    path.Buffer = buf;
+    path.Length = total;
+    path.MaximumLength = total + sizeof(WCHAR);
+
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &path, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, nullptr, nullptr);
+
+    NTSTATUS status;
+    if (Create) {
+        status = ZwCreateKey(OutKey, Access, &oa, 0, nullptr, REG_OPTION_NON_VOLATILE, nullptr);
+    } else {
+        status = ZwOpenKey(OutKey, Access, &oa);
+    }
+    ExFreePoolWithTag(buf, NODUS_POOL_TAG);
+    return status;
+}
+
+VOID NodusPersistTable(VOID)
+{
+    PAGED_CODE();
+
+    NODUS_PERSIST_RECORD recs[NODUS_MAX_DYNAMIC_DEVICES];
+    RtlZeroMemory(recs, sizeof(recs));
+    ULONG n = 0;
+    for (ULONG id = 1; id <= NODUS_MAX_DYNAMIC_DEVICES; ++id) {
+        const NODUS_DYNAMIC_DEVICE* slot = &g_NodusAdapter.Dynamic[id - 1];
+        if (!slot->InUse) continue;
+        recs[n].Id   = id;
+        recs[n].Kind = slot->Kind;
+        RtlStringCchCopyW(recs[n].Name, NODUS_MAX_NAME_CCH, slot->Name);
+        ++n;
+    }
+
+    HANDLE key = nullptr;
+    NTSTATUS status = NodusOpenDevicesKey(KEY_SET_VALUE, TRUE, &key);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Nodus: persist: open key failed 0x%08X\n", status);
+        return;
+    }
+    UNICODE_STRING valName;
+    RtlInitUnicodeString(&valName, L"Devices");
+    status = ZwSetValueKey(key, &valName, 0, REG_BINARY, recs,
+                           n * sizeof(NODUS_PERSIST_RECORD));
+    ZwClose(key);
+    DbgPrint("Nodus: persist: %u device(s) saved (0x%08X)\n", n, status);
+}
+
+VOID NodusRestoreDynamicDevices(VOID)
+{
+    PAGED_CODE();
+
+    HANDLE key = nullptr;
+    NTSTATUS status = NodusOpenDevicesKey(KEY_QUERY_VALUE, FALSE, &key);
+    if (!NT_SUCCESS(status)) return;   // first boot / nothing persisted
+
+    UNICODE_STRING valName;
+    RtlInitUnicodeString(&valName, L"Devices");
+
+    ULONG needed = 0;
+    status = ZwQueryValueKey(key, &valName, KeyValuePartialInformation, nullptr, 0, &needed);
+    if (needed == 0) { ZwClose(key); return; }
+
+    PKEY_VALUE_PARTIAL_INFORMATION info =
+        (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, needed, NODUS_POOL_TAG);
+    if (info == nullptr) { ZwClose(key); return; }
+
+    status = ZwQueryValueKey(key, &valName, KeyValuePartialInformation, info, needed, &needed);
+    ZwClose(key);
+    if (!NT_SUCCESS(status) || info->Type != REG_BINARY) {
+        ExFreePoolWithTag(info, NODUS_POOL_TAG);
+        return;
+    }
+
+    const ULONG count = info->DataLength / sizeof(NODUS_PERSIST_RECORD);
+    const NODUS_PERSIST_RECORD* recs = (const NODUS_PERSIST_RECORD*)info->Data;
+
+    NodusLock();
+    for (ULONG i = 0; i < count; ++i) {
+        if (recs[i].Id == 0 || recs[i].Id > NODUS_MAX_DYNAMIC_DEVICES) continue;
+        if (recs[i].Kind > NODUS_KIND_CAPTURE) continue;
+        if (!NodusNameIsValid(recs[i].Name)) continue;   // bounded read of the field
+        NTSTATUS s = NodusInstallDynamicDevice(recs[i].Id, recs[i].Kind, recs[i].Name);
+        DbgPrint("Nodus: restore id=%u kind=%u -> 0x%08X\n", recs[i].Id, recs[i].Kind, s);
+    }
+    NodusUnlock();
+
+    ExFreePoolWithTag(info, NODUS_POOL_TAG);
 }
 
 static VOID NodusFillStaticInfo(_Out_ NODUS_DEVICE_INFO* Info, _In_ ULONG Kind,
@@ -288,6 +429,7 @@ static NTSTATUS NodusIoctlCreateDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen, 
     if (!NT_SUCCESS(status)) {
         return status;   // helper rolled back fully
     }
+    NodusPersistTable();   // survive reboot (S3.4)
 
     NODUS_CREATE_DEVICE_OUTPUT* out = (NODUS_CREATE_DEVICE_OUTPUT*)Buffer;
     RtlZeroMemory(out, sizeof(*out));
@@ -324,6 +466,7 @@ static NTSTATUS NodusIoctlDestroyDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen)
     }
 
     NodusUninstallDynamicDevice(in->Id);
+    NodusPersistTable();   // survive reboot (S3.4)
     DbgPrint("Nodus: DESTROY_DEVICE -> id=%u\n", in->Id);
     return STATUS_SUCCESS;
 }

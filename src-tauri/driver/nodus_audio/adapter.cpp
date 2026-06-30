@@ -112,6 +112,10 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     //    is created in DriverEntry, independent of this devnode). Non-fatal. ──
     NodusControlOnStartDevice(DeviceObject);
 
+    // Re-create dynamic devices persisted before the last shutdown/restart (S3.4).
+    // After the FDO is captured above; takes the mutex internally. Non-fatal.
+    NodusRestoreDynamicDevices();
+
     DbgPrint("Nodus: StartDevice end status=0x%08X (capture=0x%08X)\n", status, capStatus);
     return status;
 }
@@ -289,6 +293,8 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Reg
 {
     // Zero the adapter context + init its mutex before anything can run.
     NodusControlInit();
+    // Stash the service registry path so device persistence (S3.4) can find its key.
+    NodusControlSetRegistryPath(RegistryPath);
 
     NTSTATUS status =
         PcInitializeAdapterDriver(DriverObject, RegistryPath, (PDRIVER_ADD_DEVICE)AddDevice);

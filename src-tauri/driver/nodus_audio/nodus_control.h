@@ -89,6 +89,21 @@ VOID NodusUninstallDynamicDevice(_In_ ULONG Id);
 // Tear down every dynamic endpoint (audio FDO removal path).
 VOID NodusUninstallAllDynamic(VOID);
 
+// ── Persistence + restore (t5 step 3 S3.4) ──────────────────────────────────
+// Dynamic devices are mirrored to the service registry key so they survive a
+// reboot. Storage: one REG_BINARY value under <ServiceKey>\DynamicDevices,
+// rewritten whole on every CREATE/DESTROY and replayed once at StartDevice.
+
+// DriverEntry: stash the service registry path (copied) for persistence to use.
+VOID NodusControlSetRegistryPath(_In_ PUNICODE_STRING RegistryPath);
+
+// Serialize the current dynamic table to the registry. Caller holds the Mutex.
+VOID NodusPersistTable(VOID);
+
+// Re-create persisted dynamic devices (once, from StartDevice after the FDO is
+// captured). Takes the Mutex internally; tolerant of individual failures.
+VOID NodusRestoreDynamicDevices(VOID);
+
 // Driver-wide dispatchers. Each routes the control device to our handlers and
 // everything else (the PortCls FDOs) to PcDispatchIrp.
 DRIVER_DISPATCH NodusDispatchCreateClose;   // IRP_MJ_CREATE / IRP_MJ_CLOSE
