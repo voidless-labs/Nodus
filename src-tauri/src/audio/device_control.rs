@@ -514,47 +514,43 @@ pub mod platform {
             decode_list_output(&out)
         }
 
-        /// IOCTL_NODUS_CREATE_DEVICE — STUB. The kernel handler arrives with
-        /// ADR plan steps 3 (render) / 5 (capture) and currently answers
-        /// STATUS_NOT_IMPLEMENTED, so we refuse locally with a clear error.
-        /// The input encoding (build_create_input) is final per ADR §5; when
-        /// the kernel lands, replace the stub body with the commented call.
+        /// IOCTL_NODUS_CREATE_DEVICE (t5 step 3, live). Installs one dynamic
+        /// endpoint and returns its assigned id (1..MAX_DYNAMIC_DEVICES).
         pub fn create_device(
             &self,
             kind: DeviceKind,
             requested_id: Option<u32>,
             name: &str,
         ) -> Result<u32, ControlError> {
-            // Validate now so callers get contract errors already today.
-            let _input = build_create_input(kind, requested_id, name)?;
-
-            // Wire path, ready for step 6:
-            // let mut out: CreateDeviceOutput = unsafe { std::mem::zeroed() };
-            // self.ioctl(IOCTL_NODUS_CREATE_DEVICE, as_bytes(&_input), as_bytes_mut(&mut out))?;
-            // if out.size != CREATE_DEVICE_OUTPUT_SIZE { return Err(...BadReply...); }
-            // Ok(out.id)
-            let _ = as_bytes(&_input); // keep the encode path exercised by the type checker
-            Err(ControlError::NotImplemented("CREATE_DEVICE"))
+            let input = build_create_input(kind, requested_id, name)?;
+            // SAFETY: all-integer repr(C) struct — zeroed is a valid value.
+            let mut out: CreateDeviceOutput = unsafe { std::mem::zeroed() };
+            self.ioctl(IOCTL_NODUS_CREATE_DEVICE, as_bytes(&input), as_bytes_mut(&mut out))?;
+            if out.size != CREATE_DEVICE_OUTPUT_SIZE {
+                return Err(ControlError::BadReply {
+                    code: IOCTL_NODUS_CREATE_DEVICE,
+                    detail: format!("Size={} (expected {CREATE_DEVICE_OUTPUT_SIZE})", out.size),
+                });
+            }
+            Ok(out.id)
         }
 
-        /// IOCTL_NODUS_DESTROY_DEVICE — STUB (see create_device).
-        /// id 0 (the static pair) is refused by contract on both sides.
+        /// IOCTL_NODUS_DESTROY_DEVICE (t5 step 3, live). id 0 (the static pair)
+        /// is refused by contract on both sides.
         pub fn destroy_device(&self, id: u32) -> Result<(), ControlError> {
             if id == 0 || id > MAX_DYNAMIC_DEVICES {
                 return Err(ControlError::InvalidArgument(format!(
                     "id {id} out of range 1..{MAX_DYNAMIC_DEVICES} (0 is the static pair, DESTROY is refused)"
                 )));
             }
-            let _input = DestroyDeviceInput {
+            let input = DestroyDeviceInput {
                 size: DESTROY_DEVICE_INPUT_SIZE,
                 id,
                 flags: 0,
                 reserved0: 0,
             };
-            // Wire path, ready for step 6:
-            // self.ioctl(IOCTL_NODUS_DESTROY_DEVICE, as_bytes(&_input), &mut [])?;
-            let _ = as_bytes(&_input);
-            Err(ControlError::NotImplemented("DESTROY_DEVICE"))
+            self.ioctl(IOCTL_NODUS_DESTROY_DEVICE, as_bytes(&input), &mut [])?;
+            Ok(())
         }
     }
 

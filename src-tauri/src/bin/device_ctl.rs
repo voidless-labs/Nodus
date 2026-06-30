@@ -1,94 +1,144 @@
-// device-ctl — t5 control-channel diagnostic. Run on the machine where
-// nodus_audio.sys (a build with the IOCTL control channel) is installed:
+// device-ctl — t5 control-channel tool. Run on the machine where nodus_audio.sys
+// (a t5 step-2b+ build) is installed.
 //
-//   device_ctl.exe
+//   device-ctl                              version + device table (smoke)
+//   device-ctl list                         device table only
+//   device-ctl create render|capture <name> [id]   create a dynamic endpoint
+//   device-ctl destroy <id>                 remove a dynamic endpoint
 //
-// It finds the Nodus control interface by GUID, opens it, asks the driver for
-// the protocol version (IOCTL_NODUS_QUERY_VERSION) and prints the device table
-// (IOCTL_NODUS_LIST_DEVICES). On a step-2 driver the table holds the two
-// static entries (id 0 render + id 0 capture). No Nodus app required — this
-// tests the kernel control plane of t5 in isolation. See
-// .nodus/docs/adr-t5-multi-device-ioctl.md for the contract.
+// It opens the Nodus control device (\\.\NodusControl) and drives the IOCTL
+// protocol. No Nodus app required. Contract: .nodus/docs/adr-t5-multi-device-ioctl.md.
 
 #[cfg(target_os = "windows")]
 fn main() {
-    use nodus::audio::device_control::{open_control, ControlError, CTL_VERSION};
+    use nodus::audio::device_control::{
+        open_control, ControlError, DeviceControl, DeviceKind, CTL_VERSION,
+    };
 
-    println!("=== Nodus device control check (t5) ===");
-    println!(r"Opening control device \\.\NodusControl ...");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
 
-    let ctl = match open_control() {
-        Ok(ctl) => ctl,
-        Err(ControlError::InterfaceNotFound) => {
-            println!("FAIL: control device not found.");
-            println!("  Two distinct cases lead here:");
-            println!("  - the driver is not installed at all: check Device Manager for");
-            println!("    'Nodus Virtual Audio' (ROOT\\NodusVirtualAudio), reinstall via install.ps1;");
-            println!("  - the driver IS installed but it is an older build (t1-t4, or the");
-            println!("    t5 step-2 build whose control channel could not be opened): sound");
-            println!("    and rings work, this tool does not — update to a t5 step-2b+ build.");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            println!("FAIL: cannot open the control device: {e}");
-            println!("  The device exists but the open failed — a permission/SDDL problem,");
-            println!("  not a missing driver. DebugView ('Nodus: ioctl' lines) may help.");
-            std::process::exit(1);
+    let open = || -> DeviceControl {
+        match open_control() {
+            Ok(ctl) => ctl,
+            Err(ControlError::InterfaceNotFound) => {
+                eprintln!("FAIL: control device not found.");
+                eprintln!("  Driver not installed, or an older build (t1-t4 / t5 step-2 without an");
+                eprintln!("  openable control channel). Need t5 step-2b+; reinstall via install.ps1.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("FAIL: cannot open the control device: {e}");
+                std::process::exit(1);
+            }
         }
     };
-    println!("Control device opened.\n");
 
-    // 1) QUERY_VERSION — always first (ADR §4.3).
-    let info = match ctl.query_version() {
-        Ok(info) => info,
-        Err(e) => {
-            println!("FAIL: QUERY_VERSION: {e}");
-            println!("  The interface exists but the IOCTL failed — the installed driver");
-            println!("  registers the control interface yet does not answer the protocol.");
-            println!("  Most likely a partial/older t5 build: update the driver.");
-            std::process::exit(1);
+    let print_devices = |ctl: &DeviceControl| match ctl.list_devices() {
+        Ok(devices) => {
+            println!("Devices ({}):", devices.len());
+            println!("  {:>2}  {:<8} {:<14} name", "id", "kind", "flags");
+            for d in &devices {
+                let mut flags: Vec<&str> = Vec::new();
+                if d.is_static {
+                    flags.push("static");
+                }
+                if d.ring_active {
+                    flags.push("ring-active");
+                }
+                let flags = if flags.is_empty() { "-".to_string() } else { flags.join(",") };
+                println!("  {:>2}  {:<8} {:<14} {}", d.id, d.kind.to_string(), flags, d.name);
+            }
         }
-    };
-    println!(
-        "Protocol: version {} (this tool speaks {}), max dynamic devices: {}",
-        info.protocol, CTL_VERSION, info.max_dynamic_devices
-    );
-    if info.protocol != CTL_VERSION {
-        println!("FAIL: protocol version mismatch — driver and this tool are from different builds.");
-        println!("  Update the driver (or rebuild device-ctl) so both sides speak v{CTL_VERSION}.");
-        std::process::exit(1);
-    }
-
-    // 2) LIST_DEVICES — snapshot of all slots.
-    let devices = match ctl.list_devices() {
-        Ok(devices) => devices,
         Err(e) => {
-            println!("FAIL: LIST_DEVICES: {e}");
+            eprintln!("FAIL: LIST_DEVICES: {e}");
             std::process::exit(1);
         }
     };
 
-    println!("\nDevices ({}):", devices.len());
-    println!("  {:>2}  {:<8} {:<14} name", "id", "kind", "flags");
-    for d in &devices {
-        let mut flags: Vec<&str> = Vec::new();
-        if d.is_static {
-            flags.push("static");
+    match a.as_slice() {
+        // Default: the original smoke — open + version + list.
+        [] | ["check"] => {
+            println!("=== Nodus device control check (t5) ===");
+            let ctl = open();
+            let info = match ctl.query_version() {
+                Ok(info) => info,
+                Err(e) => {
+                    eprintln!("FAIL: QUERY_VERSION: {e}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "Protocol: version {} (this tool speaks {}), max dynamic devices: {}",
+                info.protocol, CTL_VERSION, info.max_dynamic_devices
+            );
+            if info.protocol != CTL_VERSION {
+                eprintln!("FAIL: protocol version mismatch — update the driver or rebuild device-ctl.");
+                std::process::exit(1);
+            }
+            println!();
+            print_devices(&ctl);
         }
-        if d.ring_active {
-            flags.push("ring-active");
-        }
-        let flags = if flags.is_empty() { "-".to_string() } else { flags.join(",") };
-        println!("  {:>2}  {:<8} {:<14} {}", d.id, d.kind.to_string(), flags, d.name);
-    }
 
-    println!();
-    if devices.iter().any(|d| d.is_static) {
-        println!("OK: control channel works — version and device table read from the driver.");
-        println!("    (step-2 driver lists the static pair; dynamic CREATE/DESTROY come with steps 3/5)");
-    } else {
-        println!("PARTIAL: control channel answers, but no static devices are listed —");
-        println!("  unexpected for any t5 build, check the driver's adapter table in DebugView.");
+        ["list"] => {
+            let ctl = open();
+            print_devices(&ctl);
+        }
+
+        ["create", kind, name, rest @ ..] => {
+            let kind = match *kind {
+                "render" => DeviceKind::Render,
+                "capture" => DeviceKind::Capture,
+                other => {
+                    eprintln!("unknown kind '{other}' — use 'render' or 'capture'");
+                    std::process::exit(2);
+                }
+            };
+            let requested_id = rest.first().and_then(|s| s.parse::<u32>().ok());
+            let ctl = open();
+            match ctl.create_device(kind, requested_id, name) {
+                Ok(id) => {
+                    println!("OK: created {kind} device id={id} (\"{name}\")");
+                    println!();
+                    print_devices(&ctl);
+                }
+                Err(e) => {
+                    eprintln!("FAIL: CREATE_DEVICE: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        ["destroy", id] => {
+            let id: u32 = match id.parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("usage: device-ctl destroy <id>");
+                    std::process::exit(2);
+                }
+            };
+            let ctl = open();
+            match ctl.destroy_device(id) {
+                Ok(()) => {
+                    println!("OK: destroyed id={id}");
+                    println!();
+                    print_devices(&ctl);
+                }
+                Err(e) => {
+                    eprintln!("FAIL: DESTROY_DEVICE: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        _ => {
+            eprintln!("usage:");
+            eprintln!("  device-ctl                                   version + device table");
+            eprintln!("  device-ctl list                              device table");
+            eprintln!("  device-ctl create render|capture <name> [id] create an endpoint");
+            eprintln!("  device-ctl destroy <id>                      remove an endpoint");
+            std::process::exit(2);
+        }
     }
 }
 
