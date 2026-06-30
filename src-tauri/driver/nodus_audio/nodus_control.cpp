@@ -15,6 +15,11 @@
 
 NODUS_ADAPTER_CONTEXT g_NodusAdapter;   // zeroed by NodusControlInit in DriverEntry
 
+// Copied service registry path for device persistence (S3.4). Set in DriverEntry,
+// freed in NodusControlDeleteDevice. Declared here (before its first use in
+// NodusControlDeleteDevice); the persistence helpers live further down.
+static UNICODE_STRING g_RegistryPath = { 0, 0, nullptr };
+
 // Object-manager names for the control device. Userspace opens "\\.\NodusControl"
 // which the object manager resolves through \DosDevices\NodusControl.
 static const WCHAR c_ControlDeviceName[] = L"\\Device\\NodusControl";
@@ -183,8 +188,6 @@ typedef struct _NODUS_PERSIST_RECORD {
     ULONG Kind;
     WCHAR Name[NODUS_MAX_NAME_CCH];
 } NODUS_PERSIST_RECORD;
-
-static UNICODE_STRING g_RegistryPath = { 0, 0, nullptr };
 
 VOID NodusControlSetRegistryPath(_In_ PUNICODE_STRING RegistryPath)
 {
