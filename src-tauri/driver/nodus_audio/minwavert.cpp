@@ -110,8 +110,8 @@ VOID CMiniportWaveRT::EnsureRing()
     if (m_Ring.Header) return;
     KeWaitForSingleObject(&m_RingLock, Executive, KernelMode, FALSE, nullptr);
     if (!m_Ring.Header) {
-        NTSTATUS status = NodusRingCreate(NODUS_RING_NAME_KERNEL, 0, FALSE, &m_Ring);
-        DbgPrint("Nodus: NodusRingCreate(render, 0) status=0x%08X\n", status);
+        NTSTATUS status = NodusRingCreate(NODUS_RING_NAME_KERNEL, m_RingId, FALSE, &m_Ring);
+        DbgPrint("Nodus: NodusRingCreate(render, %u) status=0x%08X\n", m_RingId, status);
     }
     KeReleaseMutex(&m_RingLock, FALSE);
 }
@@ -164,9 +164,9 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveRT::NewStream(
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
-NTSTATUS CreateMiniportWaveRTNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown)
+NTSTATUS CreateMiniportWaveRTNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown, ULONG RingId)
 {
-    CMiniportWaveRT* obj = new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(OuterUnknown);
+    CMiniportWaveRT* obj = new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportWaveRT(OuterUnknown, RingId);
     if (!obj) return STATUS_INSUFFICIENT_RESOURCES;
     obj->AddRef();
     *Unknown = PUNKNOWN(PMINIPORTWAVERT(obj));

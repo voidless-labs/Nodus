@@ -11,14 +11,15 @@
 // GUID_DEVINTERFACE_NODUS_CONTROL (same pattern as the PortCls GUIDs above).
 #include "nodus_control.h"
 
-typedef NTSTATUS (*PFN_CREATE_MINIPORT)(PUNKNOWN*, PUNKNOWN);
+typedef NTSTATUS (*PFN_CREATE_MINIPORT)(PUNKNOWN*, PUNKNOWN, ULONG);
 
-// Create a PortCls port of the given class, bind our miniport, register it as a
-// named subdevice, and hand the port back (referenced) for the physical connection.
+// Create a PortCls port of the given class, bind our miniport (on ring RingId),
+// register it as a named subdevice, and hand the port back (referenced) for the
+// physical connection. RingId 0 = the static boot pair; 1.. = a dynamic device.
 static NTSTATUS InstallSubdevice(
     PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST ResourceList,
     REFGUID PortClassId, PWSTR Name, PFN_CREATE_MINIPORT CreateMiniport,
-    PPORT* OutPort)
+    ULONG RingId, PPORT* OutPort)
 {
     *OutPort = nullptr;
 
@@ -28,7 +29,7 @@ static NTSTATUS InstallSubdevice(
     if (!NT_SUCCESS(status)) return status;
 
     PUNKNOWN miniport = nullptr;
-    status = CreateMiniport(&miniport, nullptr);   // refcount 1 (factory AddRef'd)
+    status = CreateMiniport(&miniport, nullptr, RingId);   // refcount 1 (factory AddRef'd)
     if (NT_SUCCESS(status)) {
         status = port->Init(DeviceObject, Irp, miniport, nullptr, ResourceList);
         DbgPrint("Nodus: port->Init(%ws) status=0x%08X\n", Name, status);
@@ -57,11 +58,11 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     PPORT wavePort = nullptr, topoPort = nullptr;
 
     NTSTATUS status = InstallSubdevice(DeviceObject, Irp, ResourceList,
-        CLSID_PortWaveRT, NODUS_WAVE_NAME, CreateMiniportWaveRTNodus, &wavePort);
+        CLSID_PortWaveRT, NODUS_WAVE_NAME, CreateMiniportWaveRTNodus, 0, &wavePort);
     if (!NT_SUCCESS(status)) return status;
 
     status = InstallSubdevice(DeviceObject, Irp, ResourceList,
-        CLSID_PortTopology, NODUS_TOPO_NAME, CreateMiniportTopologyNodus, &topoPort);
+        CLSID_PortTopology, NODUS_TOPO_NAME, CreateMiniportTopologyNodus, 0, &topoPort);
 
     if (NT_SUCCESS(status)) {
         // Wire wave bridge pin (out) -> topology bridge pin (in). This connection is
@@ -83,11 +84,11 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     PPORT waveCapPort = nullptr, topoCapPort = nullptr;
 
     NTSTATUS capStatus = InstallSubdevice(DeviceObject, Irp, ResourceList,
-        CLSID_PortWaveRT, NODUS_WAVECAP_NAME, CreateMiniportWaveCaptureNodus, &waveCapPort);
+        CLSID_PortWaveRT, NODUS_WAVECAP_NAME, CreateMiniportWaveCaptureNodus, 0, &waveCapPort);
 
     if (NT_SUCCESS(capStatus)) {
         capStatus = InstallSubdevice(DeviceObject, Irp, ResourceList,
-            CLSID_PortTopology, NODUS_TOPOCAP_NAME, CreateMiniportTopologyCapNodus, &topoCapPort);
+            CLSID_PortTopology, NODUS_TOPOCAP_NAME, CreateMiniportTopologyCapNodus, 0, &topoCapPort);
     }
 
     if (NT_SUCCESS(capStatus)) {

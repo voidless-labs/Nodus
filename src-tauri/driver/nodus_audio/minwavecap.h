@@ -11,7 +11,8 @@ class CMiniportWaveCapture : public IMiniportWaveRT, public CUnknown
 {
 public:
     DECLARE_STD_UNKNOWN();
-    CMiniportWaveCapture(PUNKNOWN outer) : CUnknown(outer), m_Port(nullptr), m_Reader(nullptr)
+    CMiniportWaveCapture(PUNKNOWN outer, ULONG ringId)
+        : CUnknown(outer), m_RingId(ringId), m_Port(nullptr), m_Reader(nullptr)
     {
         RtlZeroMemory(&m_Ring, sizeof(m_Ring));
         KeInitializeMutex(&m_RingLock, 0);
@@ -43,6 +44,7 @@ public:
     }
 
 private:
+    ULONG          m_RingId;   // shared-ring instance (0 = static pair)
     PPORTWAVERT    m_Port;
     NODUS_RING     m_Ring;
     KMUTEX         m_RingLock;

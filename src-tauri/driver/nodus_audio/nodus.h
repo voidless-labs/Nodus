@@ -43,7 +43,10 @@ enum { TOPOCAP_PIN_BRIDGE = 0, TOPOCAP_PIN_MIC = 1 };
 
 // Factory helpers (defined in the respective .cpp). Allocations use NonPagedPoolNx
 // via stdunk's operator new(size_t, POOL_TYPE, ULONG).
-NTSTATUS CreateMiniportWaveRTNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown);
-NTSTATUS CreateMiniportTopologyNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown);
-NTSTATUS CreateMiniportWaveCaptureNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown);
-NTSTATUS CreateMiniportTopologyCapNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown);
+// RingId selects the shared-ring instance (t5 step 3): 0 = the static boot pair,
+// 1..NODUS_MAX_DYNAMIC_DEVICES = a dynamic device. Topology factories accept it
+// for a uniform signature but ignore it (a topology has no ring).
+NTSTATUS CreateMiniportWaveRTNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown, _In_ ULONG RingId);
+NTSTATUS CreateMiniportTopologyNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown, _In_ ULONG RingId);
+NTSTATUS CreateMiniportWaveCaptureNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown, _In_ ULONG RingId);
+NTSTATUS CreateMiniportTopologyCapNodus(_Out_ PUNKNOWN* Unknown, _In_opt_ PUNKNOWN OuterUnknown, _In_ ULONG RingId);

@@ -94,8 +94,9 @@ STDMETHODIMP_(NTSTATUS) CMiniportTopology::DataRangeIntersection(
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
-NTSTATUS CreateMiniportTopologyNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown)
+NTSTATUS CreateMiniportTopologyNodus(PUNKNOWN* Unknown, PUNKNOWN OuterUnknown, ULONG RingId)
 {
+    UNREFERENCED_PARAMETER(RingId);   // topology has no ring
     CMiniportTopology* obj = new(NonPagedPoolNx, NODUS_POOL_TAG) CMiniportTopology(OuterUnknown);
     if (!obj) return STATUS_INSUFFICIENT_RESOURCES;
     obj->AddRef();
