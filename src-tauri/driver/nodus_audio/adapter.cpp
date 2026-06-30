@@ -3,6 +3,7 @@
 #define INITGUID
 #include "nodus.h"
 #include <ksmedia.h>
+#include <ntstrsafe.h>   // RtlStringCchPrintfW / RtlStringCchCopyW (dynamic names)
 #include "minwavert.h"
 #include "mintopo.h"
 #include "minwavecap.h"
@@ -115,10 +116,155 @@ NTSTATUS StartDevice(PDEVICE_OBJECT DeviceObject, PIRP Irp, PRESOURCELIST Resour
     return status;
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic subdevice lifecycle (t5 step 3). Runtime register/unregister of a
+// wave+topology pair on the already-started audio FDO. All PASSIVE_LEVEL; the
+// caller (the CREATE/DESTROY/PnP paths in nodus_control.cpp) holds the mutex.
+// ---------------------------------------------------------------------------
+
+// Unregister one subdevice port: QI IUnregisterSubdevice and call it with the
+// port's own IUnknown (the object PcRegisterSubdevice was given). PortCls then
+// invalidates the subdevice factory; the port object itself dies on our Release.
+static VOID NodusUnregisterPort(PDEVICE_OBJECT Fdo, PPORT Port)
+{
+    if (Port == nullptr) return;
+    IUnregisterSubdevice* unreg = nullptr;
+    NTSTATUS status = Port->QueryInterface(IID_IUnregisterSubdevice, (PVOID*)&unreg);
+    if (NT_SUCCESS(status) && unreg != nullptr) {
+        unreg->UnregisterSubdevice(Fdo, Port);
+        unreg->Release();
+    } else {
+        DbgPrint("Nodus: QI IUnregisterSubdevice failed 0x%08X\n", status);
+    }
+}
+
+// Unregister the physical connection between two ports (same args as registration).
+static VOID NodusUnregisterConnection(PDEVICE_OBJECT Fdo, PPORT FromPort, ULONG FromPin,
+                                      PPORT ToPort, ULONG ToPin)
+{
+    if (FromPort == nullptr) return;
+    IUnregisterPhysicalConnection* unreg = nullptr;
+    NTSTATUS status = FromPort->QueryInterface(IID_IUnregisterPhysicalConnection, (PVOID*)&unreg);
+    if (NT_SUCCESS(status) && unreg != nullptr) {
+        unreg->UnregisterPhysicalConnection(Fdo, FromPort, FromPin, ToPort, ToPin);
+        unreg->Release();
+    } else {
+        DbgPrint("Nodus: QI IUnregisterPhysicalConnection failed 0x%08X\n", status);
+    }
+}
+
+NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
+{
+    PAGED_CODE();
+
+    PDEVICE_OBJECT fdo = g_NodusAdapter.Fdo;
+    if (fdo == nullptr) {
+        DbgPrint("Nodus: dynamic install id=%u: no audio FDO yet\n", Id);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (Id == 0 || Id > NODUS_MAX_DYNAMIC_DEVICES) return STATUS_INVALID_PARAMETER;
+
+    NODUS_DYNAMIC_DEVICE* slot = &g_NodusAdapter.Dynamic[Id - 1];
+    if (slot->InUse) return STATUS_OBJECT_NAME_COLLISION;
+
+    const BOOLEAN capture = (Kind == NODUS_KIND_CAPTURE);
+
+    // Unique reference names per kind (ADR §6.1): Wave-N/Topology-N (render),
+    // WaveCap-N/TopologyCap-N (capture).
+    WCHAR waveName[32], topoName[32];
+    RtlStringCchPrintfW(waveName, RTL_NUMBER_OF(waveName), capture ? L"WaveCap-%u" : L"Wave-%u", Id);
+    RtlStringCchPrintfW(topoName, RTL_NUMBER_OF(topoName), capture ? L"TopologyCap-%u" : L"Topology-%u", Id);
+
+    PFN_CREATE_MINIPORT waveFactory = capture ? CreateMiniportWaveCaptureNodus : CreateMiniportWaveRTNodus;
+    PFN_CREATE_MINIPORT topoFactory = capture ? CreateMiniportTopologyCapNodus : CreateMiniportTopologyNodus;
+
+    // Runtime install: Irp = NULL and ResourceList = NULL (software device, no PnP
+    // resources) — the SYSVAD sideband pattern. RingId = Id ties the miniport to
+    // its own shared ring (Global\NodusRing[-mic]-<Id>).
+    PPORT wavePort = nullptr, topoPort = nullptr;
+    NTSTATUS status = InstallSubdevice(fdo, nullptr, nullptr,
+        CLSID_PortWaveRT, waveName, waveFactory, Id, &wavePort);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Nodus: dynamic install id=%u wave failed 0x%08X\n", Id, status);
+        return status;
+    }
+
+    status = InstallSubdevice(fdo, nullptr, nullptr,
+        CLSID_PortTopology, topoName, topoFactory, Id, &topoPort);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Nodus: dynamic install id=%u topo failed 0x%08X\n", Id, status);
+        NodusUnregisterPort(fdo, wavePort);
+        wavePort->Release();
+        return status;
+    }
+
+    // Physical connection — same pins as the static pair, direction by kind:
+    // render = wave(bridge out) -> topo(bridge in); capture = topo(bridge out) -> wave(bridge in).
+    if (capture) {
+        status = PcRegisterPhysicalConnection(fdo, topoPort, TOPOCAP_PIN_BRIDGE, wavePort, WAVECAP_PIN_BRIDGE);
+    } else {
+        status = PcRegisterPhysicalConnection(fdo, wavePort, WAVE_PIN_BRIDGE, topoPort, TOPO_PIN_BRIDGE);
+    }
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Nodus: dynamic install id=%u connection failed 0x%08X\n", Id, status);
+        NodusUnregisterPort(fdo, topoPort); topoPort->Release();
+        NodusUnregisterPort(fdo, wavePort); wavePort->Release();
+        return status;
+    }
+
+    // Record the slot, keeping both port references (released on teardown).
+    slot->InUse = TRUE;
+    slot->Kind  = Kind;
+    slot->Wave  = wavePort;
+    slot->Topo  = topoPort;
+    RtlStringCchCopyW(slot->Name, RTL_NUMBER_OF(slot->Name), FriendlyName);
+    DbgPrint("Nodus: dynamic device id=%u kind=%u installed (%ws)\n", Id, Kind, waveName);
+    return STATUS_SUCCESS;
+}
+
+VOID NodusUninstallDynamicDevice(ULONG Id)
+{
+    PAGED_CODE();
+    if (Id == 0 || Id > NODUS_MAX_DYNAMIC_DEVICES) return;
+
+    NODUS_DYNAMIC_DEVICE* slot = &g_NodusAdapter.Dynamic[Id - 1];
+    if (!slot->InUse) return;
+
+    PDEVICE_OBJECT fdo = g_NodusAdapter.Fdo;
+    const BOOLEAN capture = (slot->Kind == NODUS_KIND_CAPTURE);
+
+    // Order (ADR §6.3): drop the physical connection, then both subdevices, then
+    // release our references. Our Release runs AFTER unregister, so PortCls/KS
+    // refcounts manage the real lifetime (no use-after-free of a live pin).
+    if (capture) {
+        NodusUnregisterConnection(fdo, slot->Topo, TOPOCAP_PIN_BRIDGE, slot->Wave, WAVECAP_PIN_BRIDGE);
+    } else {
+        NodusUnregisterConnection(fdo, slot->Wave, WAVE_PIN_BRIDGE, slot->Topo, TOPO_PIN_BRIDGE);
+    }
+    NodusUnregisterPort(fdo, slot->Wave);
+    NodusUnregisterPort(fdo, slot->Topo);
+
+    if (slot->Wave) { slot->Wave->Release(); slot->Wave = nullptr; }
+    if (slot->Topo) { slot->Topo->Release(); slot->Topo = nullptr; }
+    slot->InUse = FALSE;
+    slot->Kind  = 0;
+    slot->Name[0] = L'\0';
+    DbgPrint("Nodus: dynamic device id=%u uninstalled\n", Id);
+}
+
+VOID NodusUninstallAllDynamic(VOID)
+{
+    PAGED_CODE();
+    for (ULONG id = 1; id <= NODUS_MAX_DYNAMIC_DEVICES; ++id) {
+        NodusUninstallDynamicDevice(id);
+    }
+}
+
 extern "C" NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObject)
 {
-    // Four subdevices: render wave + topology, capture wave + topology.
-    NTSTATUS status = PcAddAdapterDevice(DriverObject, PhysicalDeviceObject, StartDevice, 4, 0);
+    // Subdevice slots: 4 static (render+capture wave/topo) + up to 8 dynamic
+    // endpoints x 2 subdevices = 20 (ADR §6.1). MaxObjects caps PcRegisterSubdevice.
+    NTSTATUS status = PcAddAdapterDevice(DriverObject, PhysicalDeviceObject, StartDevice, 20, 0);
     if (NT_SUCCESS(status)) {
         // Capture the PDO so StartDevice can register the control interface on it
         // (first devnode wins; clears any stale Removing flag). Non-fatal.

@@ -18,6 +18,18 @@
 #include "nodus.h"
 #include "nodus_ioctl.h"
 
+// One dynamic endpoint = a wave+topology subdevice pair installed at runtime
+// (t5 step 3). We hold a reference to each port for the lifetime of the device so
+// teardown can call IUnregisterSubdevice on them (ADR §6.1, §6.3). Indexed by
+// id-1 (ids are 1..NODUS_MAX_DYNAMIC_DEVICES; id 0 is the static boot pair).
+typedef struct _NODUS_DYNAMIC_DEVICE {
+    BOOLEAN InUse;
+    ULONG   Kind;                          // NODUS_KIND_RENDER / NODUS_KIND_CAPTURE
+    PPORT   Wave;                          // held reference (NULL when free)
+    PPORT   Topo;                          // held reference (NULL when free)
+    WCHAR   Name[NODUS_MAX_NAME_CCH];       // FriendlyName from CREATE
+} NODUS_DYNAMIC_DEVICE;
+
 // One adapter, global context. The control device lives for as long as the
 // driver is loaded (created in DriverEntry, deleted in DriverUnload), so the
 // control channel is reachable even while the audio devnode is transitioning.
@@ -31,9 +43,8 @@ typedef struct _NODUS_ADAPTER_CONTEXT {
                                      // any Nodus IOCTL afterwards -> STATUS_DEVICE_NOT_READY
     KMUTEX         Mutex;            // serializes CREATE/DESTROY/LIST and PnP-remove
 
-    // t5 step 3 adds the dynamic device table here (id 1..8 -> {Kind, Name,
-    // PPORT Wave, PPORT Topo}, references held for IUnregisterSubdevice),
-    // guarded by the same Mutex. Step 2 ships the statics-only LIST.
+    // Dynamic device table (t5 step 3), guarded by the same Mutex.
+    NODUS_DYNAMIC_DEVICE Dynamic[NODUS_MAX_DYNAMIC_DEVICES];
 } NODUS_ADAPTER_CONTEXT;
 
 extern NODUS_ADAPTER_CONTEXT g_NodusAdapter;
@@ -54,6 +65,23 @@ VOID NodusControlOnAddDevice(_In_ PDEVICE_OBJECT Pdo);
 // StartDevice: capture the audio FDO (used by step 3 for runtime subdevice
 // registration, and to correlate the PnP-remove below).
 VOID NodusControlOnStartDevice(_In_ PDEVICE_OBJECT Fdo);
+
+// ── Dynamic subdevice lifecycle (t5 step 3, implemented in adapter.cpp) ──────
+// All run at PASSIVE_LEVEL and ASSUME THE CALLER HOLDS g_NodusAdapter.Mutex.
+//
+// Install one dynamic endpoint (a wave+topo pair) on the captured audio FDO at
+// runtime: Id 1..8 (must be free), Kind render/capture, FriendlyName recorded in
+// the slot. On success the slot holds a reference to both ports. Rolls back fully
+// on any failure.
+NTSTATUS NodusInstallDynamicDevice(_In_ ULONG Id, _In_ ULONG Kind, _In_ PCWSTR FriendlyName);
+
+// Tear down one dynamic endpoint (ADR §6.3): unregister the physical connection,
+// then both subdevices, then release our port references and free the slot.
+// No-op for a free or out-of-range id.
+VOID NodusUninstallDynamicDevice(_In_ ULONG Id);
+
+// Tear down every dynamic endpoint (audio FDO removal path).
+VOID NodusUninstallAllDynamic(VOID);
 
 // Driver-wide dispatchers. Each routes the control device to our handlers and
 // everything else (the PortCls FDOs) to PcDispatchIrp.
