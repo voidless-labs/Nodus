@@ -364,6 +364,20 @@ export async function getServerInfo(): Promise<ServerInfo | null> {
   return call<ServerInfo>('get_server_info');
 }
 
+/** Open a URL in the user's real browser (Tauri shell), or a new tab in the browser. */
+export async function openExternal(url: string): Promise<void> {
+  if (isTauri) {
+    try {
+      const mod = await import('@tauri-apps/api/shell');
+      await mod.open(url);
+      return;
+    } catch (e) {
+      console.error('shell.open:', e);
+    }
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 // ── Scene sync (t17 phase B) ─────────────────────────────────────────────────
 // The workspace document `{ tabs, activeId }` lives in the daemon as the single
 // source of truth. A client pushes the whole document after a local mutation;
@@ -406,6 +420,8 @@ export interface Settings {
   start_engine_on_launch: boolean;
   close_to_tray: boolean;
   start_with_windows: boolean;
+  // appearance (live)
+  accent: string;
 }
 
 /** Defaults mirroring Rust `Settings::default()` — used before hydrate / offline. */
@@ -418,6 +434,7 @@ export const DEFAULT_SETTINGS: Settings = {
   start_engine_on_launch: false,
   close_to_tray: true,
   start_with_windows: false,
+  accent: '#F5C542',
 };
 
 export async function getSettings(): Promise<Settings | null> {

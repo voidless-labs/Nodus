@@ -43,6 +43,10 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// Launch Nodus when Windows starts (HKCU Run; applied on change).
     pub start_with_windows: bool,
+
+    // ── Appearance (applied live, frontend) ─────────────────────────────────
+    /// UI accent color as a CSS hex string. Drives --color-accent and friends.
+    pub accent: String,
 }
 
 impl Default for Settings {
@@ -56,6 +60,7 @@ impl Default for Settings {
             start_engine_on_launch: false,
             close_to_tray: true,
             start_with_windows: false,
+            accent: "#F5C542".into(),
         }
     }
 }

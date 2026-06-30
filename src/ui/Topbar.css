@@ -20,28 +20,46 @@
   justify-self: start;
 }
 .brand-mark {
-  position: relative;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 1.5px solid var(--color-accent);
-}
-.brand-mark::after {
-  content: '';
-  position: absolute;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 .brand-name {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.22em;
   color: var(--color-text-primary);
+}
+
+/* ── Undo / redo (arc arrows next to the brand) ───────────────── */
+.brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+}
+.brand-action {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.brand-action:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+.brand-action:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 /* ── Center: scene navigator (‹ name × ›) ─────────────────────── */

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { winMinimize, winToggleMaximize, winHide, winIsMaximized, onWinResize } from '../bridge';
+import brandIcon from '../assets/brand.png';
 import './Topbar.css';
 
 /**
@@ -17,6 +18,10 @@ export function Topbar({
   onClose,
   onRename,
   onOpenSettings,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
   windowControls = true,
   sceneEditing = true,
 }: {
@@ -28,6 +33,11 @@ export function Topbar({
   onRename?: (id: string, name: string) => void;
   /** Open the settings dialog (t14). Omitted in the flyout → no gear shown. */
   onOpenSettings?: () => void;
+  /** Undo/redo the last scene edit (t14 wave 2). Omitted in the flyout. */
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   /** Show the min/max/close window buttons (off in the tray flyout). */
   windowControls?: boolean;
   /** Show the add (+) / delete (−) scene buttons (off in the flyout — there you
@@ -63,8 +73,30 @@ export function Topbar({
   return (
     <header className="topbar" data-tauri-drag-region>
       <div className="topbar-left" data-tauri-drag-region>
-        <span className="brand-mark" aria-hidden data-tauri-drag-region />
-        <span className="brand-name" data-tauri-drag-region>nodus</span>
+        <img className="brand-mark" src={brandIcon} alt="" aria-hidden data-tauri-drag-region />
+        <span className="brand-name" data-tauri-drag-region>NODUS</span>
+        {(onUndo || onRedo) && (
+          <div className="brand-actions">
+            <button
+              className="brand-action"
+              aria-label="undo"
+              title="Undo (Ctrl+Z)"
+              disabled={!canUndo}
+              onClick={() => onUndo?.()}
+            >
+              <UndoArc />
+            </button>
+            <button
+              className="brand-action"
+              aria-label="redo"
+              title="Redo (Ctrl+X)"
+              disabled={!canRedo}
+              onClick={() => onRedo?.()}
+            >
+              <RedoArc />
+            </button>
+          </div>
+        )}
       </div>
 
       <nav className="scene-nav" aria-label="scenes">
@@ -205,6 +237,24 @@ function WindowControls() {
   );
 }
 
+// Curved arc arrows for undo/redo — deliberately different from the scene
+// chevrons (‹ ›): a hooked arrowhead on a half-circle arc.
+function UndoArc() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+    </svg>
+  );
+}
+function RedoArc() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m15 14 5-5-5-5" />
+      <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13" />
+    </svg>
+  );
+}
 function Gear() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

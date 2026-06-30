@@ -243,6 +243,11 @@ export interface SceneStore {
   connectNewBoth: (splitterId: string, mixerId: string) => void;
   /** Push the current graph to the engine (called when the engine turns on). */
   applyNow: () => void;
+  /** Undo / redo the last scene edit (history of the whole workspace). */
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 interface SceneTab {
@@ -286,6 +291,18 @@ export function useScene(live: boolean): SceneStore {
   // echo and no-op renders.
   const lastSyncRef = useRef('');
   const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Undo/redo history refs (whole-workspace snapshots) ─────────────────
+  const historyRef = useRef<{ past: WorkspaceDoc[]; future: WorkspaceDoc[]; present: WorkspaceDoc | null }>({
+    past: [],
+    future: [],
+    present: null,
+  });
+  // Set true right before a state change that should NOT create a new history
+  // entry (an undo/redo step, or applying a remote snapshot).
+  const timeTravelRef = useRef(false);
+  const lastEditRef = useRef(0);
+  const [histVer, setHistVer] = useState(0);
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
   const scene = active.data;
@@ -347,6 +364,7 @@ export function useScene(live: boolean): SceneStore {
         pushTimerRef.current = null;
       }
       lastSyncRef.current = JSON.stringify({ tabs: doc.tabs, activeId: doc.activeId });
+      timeTravelRef.current = true; // a remote snapshot is not a local undo step
       setTabs(doc.tabs);
       setActiveId(doc.activeId);
     };
@@ -410,6 +428,68 @@ export function useScene(live: boolean): SceneStore {
     },
     [],
   );
+
+  // ── Undo/redo history (t14 wave 2) ─────────────────────────────────────
+  // Snapshot the whole workspace on each user edit; rapid edits (e.g. a slider
+  // drag) coalesce into one entry. undo/redo set state via the time-travel flag so
+  // they don't record a new entry, and the sync effect still mirrors them.
+  const HISTORY_LIMIT = 50;
+  useEffect(() => {
+    const doc: WorkspaceDoc = { tabs, activeId };
+    const h = historyRef.current;
+    if (timeTravelRef.current) {
+      timeTravelRef.current = false;
+      h.present = doc;
+      return;
+    }
+    if (h.present === null) {
+      h.present = doc;
+      return;
+    }
+    const json = JSON.stringify(doc);
+    if (json === JSON.stringify(h.present)) return; // no real change
+    const now = Date.now();
+    const coalesce = now - lastEditRef.current < 500;
+    lastEditRef.current = now;
+    const hadFuture = h.future.length > 0;
+    const hadPast = h.past.length > 0;
+    if (!coalesce) {
+      h.past.push(h.present);
+      if (h.past.length > HISTORY_LIMIT) h.past.shift();
+    }
+    h.future = [];
+    h.present = doc;
+    if (!coalesce || hadFuture || !hadPast) setHistVer((v) => v + 1);
+  }, [tabs, activeId]);
+
+  const timeTravelTo = useCallback(
+    (doc: WorkspaceDoc) => {
+      timeTravelRef.current = true;
+      setTabs(doc.tabs);
+      setActiveId(doc.activeId);
+      setHistVer((v) => v + 1);
+      applyLater(); // re-apply the restored graph to the engine if live
+    },
+    [applyLater],
+  );
+
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.past.length || h.present === null) return;
+    const prev = h.past.pop() as WorkspaceDoc;
+    h.future.unshift(h.present);
+    h.present = prev;
+    timeTravelTo(prev);
+  }, [timeTravelTo]);
+
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.future.length || h.present === null) return;
+    const next = h.future.shift() as WorkspaceDoc;
+    h.past.push(h.present);
+    h.present = next;
+    timeTravelTo(next);
+  }, [timeTravelTo]);
 
   // ── scene management (R22 multi-scene) ─────────────────────────────────
   const switchScene = useCallback(
@@ -891,6 +971,10 @@ export function useScene(live: boolean): SceneStore {
       connectNewOutput,
       connectNewBoth,
       applyNow,
+      undo,
+      redo,
+      canUndo: historyRef.current.past.length > 0,
+      canRedo: historyRef.current.future.length > 0,
     }),
     [
       scene,
@@ -931,6 +1015,9 @@ export function useScene(live: boolean): SceneStore {
       connectNewOutput,
       connectNewBoth,
       applyNow,
+      undo,
+      redo,
+      histVer,
     ],
   );
 }

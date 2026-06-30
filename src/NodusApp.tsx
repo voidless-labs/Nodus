@@ -280,6 +280,26 @@ export default function NodusApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [clearSelection]);
 
+  // Undo (Ctrl+Z) / Redo (Ctrl+X) for scene edits. Use e.code (physical key) so it
+  // works on non-Latin keyboard layouts too — on a Cyrillic layout e.key is 'я'/'ч',
+  // not 'z'/'x'. Ignored while typing in a field so native text undo/cut still works.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      if (e.code === 'KeyZ') {
+        e.preventDefault();
+        storeRef.current.undo();
+      } else if (e.code === 'KeyX') {
+        e.preventDefault();
+        storeRef.current.redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Switching scenes resets the transient view + selection.
   useEffect(() => {
     setSelection(new Set());
@@ -320,6 +340,10 @@ export default function NodusApp() {
         onClose={store.closeScene}
         onRename={store.renameScene}
         onOpenSettings={() => setSettingsOpen(true)}
+        onUndo={store.undo}
+        onRedo={store.redo}
+        canUndo={store.canUndo}
+        canRedo={store.canRedo}
       />
       <div className="canvas-area" ref={canvasAreaRef}>
         <Canvas view={viewCtl.view}>

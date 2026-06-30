@@ -51,6 +51,18 @@ export function useSettings(): SettingsStore {
     };
   }, []);
 
+  // Apply the accent color live by overriding the design tokens on :root, so the
+  // whole UI re-tints without touching the static token file. (t14 wave 2)
+  useEffect(() => {
+    const root = document.documentElement;
+    const a = settings.accent || DEFAULT_SETTINGS.accent;
+    root.style.setProperty('--color-accent', a);
+    root.style.setProperty('--color-accent-hover', `color-mix(in srgb, ${a} 85%, #000)`);
+    root.style.setProperty('--color-accent-soft', `color-mix(in srgb, ${a} 14%, transparent)`);
+    root.style.setProperty('--color-engine-fill', `color-mix(in srgb, ${a} 90%, #000)`);
+    root.style.setProperty('--glow-accent', `0 0 18px color-mix(in srgb, ${a} 30%, transparent)`);
+  }, [settings.accent]);
+
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((cur) => {
       const next = { ...cur, ...patch };
