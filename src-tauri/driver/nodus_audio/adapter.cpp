@@ -170,10 +170,13 @@ NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
     const BOOLEAN capture = (Kind == NODUS_KIND_CAPTURE);
 
     // Unique reference names per kind (ADR §6.1): Wave-N/Topology-N (render),
-    // WaveCap-N/TopologyCap-N (capture).
-    WCHAR waveName[32], topoName[32];
-    RtlStringCchPrintfW(waveName, RTL_NUMBER_OF(waveName), capture ? L"WaveCap-%u" : L"Wave-%u", Id);
-    RtlStringCchPrintfW(topoName, RTL_NUMBER_OF(topoName), capture ? L"TopologyCap-%u" : L"Topology-%u", Id);
+    // WaveCap-N/TopologyCap-N (capture). Stored IN THE SLOT (device lifetime) —
+    // PcRegisterSubdevice keeps this pointer and KS dereferences it on every open,
+    // so a stack buffer would dangle and bugcheck (PAGE_FAULT in ks!DispatchCreate).
+    RtlStringCchPrintfW(slot->WaveName, RTL_NUMBER_OF(slot->WaveName),
+                        capture ? L"WaveCap-%u" : L"Wave-%u", Id);
+    RtlStringCchPrintfW(slot->TopoName, RTL_NUMBER_OF(slot->TopoName),
+                        capture ? L"TopologyCap-%u" : L"Topology-%u", Id);
 
     PFN_CREATE_MINIPORT waveFactory = capture ? CreateMiniportWaveCaptureNodus : CreateMiniportWaveRTNodus;
     PFN_CREATE_MINIPORT topoFactory = capture ? CreateMiniportTopologyCapNodus : CreateMiniportTopologyNodus;
@@ -183,14 +186,14 @@ NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
     // its own shared ring (Global\NodusRing[-mic]-<Id>).
     PPORT wavePort = nullptr, topoPort = nullptr;
     NTSTATUS status = InstallSubdevice(fdo, nullptr, nullptr,
-        CLSID_PortWaveRT, waveName, waveFactory, Id, &wavePort);
+        CLSID_PortWaveRT, slot->WaveName, waveFactory, Id, &wavePort);
     if (!NT_SUCCESS(status)) {
         DbgPrint("Nodus: dynamic install id=%u wave failed 0x%08X\n", Id, status);
         return status;
     }
 
     status = InstallSubdevice(fdo, nullptr, nullptr,
-        CLSID_PortTopology, topoName, topoFactory, Id, &topoPort);
+        CLSID_PortTopology, slot->TopoName, topoFactory, Id, &topoPort);
     if (!NT_SUCCESS(status)) {
         DbgPrint("Nodus: dynamic install id=%u topo failed 0x%08X\n", Id, status);
         NodusUnregisterPort(fdo, wavePort);
@@ -218,7 +221,7 @@ NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
     slot->Wave  = wavePort;
     slot->Topo  = topoPort;
     RtlStringCchCopyW(slot->Name, RTL_NUMBER_OF(slot->Name), FriendlyName);
-    DbgPrint("Nodus: dynamic device id=%u kind=%u installed (%ws)\n", Id, Kind, waveName);
+    DbgPrint("Nodus: dynamic device id=%u kind=%u installed (%ws)\n", Id, Kind, slot->WaveName);
     return STATUS_SUCCESS;
 }
 

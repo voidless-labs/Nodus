@@ -28,6 +28,12 @@ typedef struct _NODUS_DYNAMIC_DEVICE {
     PPORT   Wave;                          // held reference (NULL when free)
     PPORT   Topo;                          // held reference (NULL when free)
     WCHAR   Name[NODUS_MAX_NAME_CCH];       // FriendlyName from CREATE
+    // Subdevice REFERENCE names. PcRegisterSubdevice keeps the caller's pointer
+    // (it does NOT copy), and KS reads it on every open (ks!DispatchCreate ->
+    // wcsnicmp). They MUST outlive registration — so they live here, in the slot,
+    // not on the install function's stack (a stack buffer => dangling ptr => BSOD).
+    WCHAR   WaveName[32];
+    WCHAR   TopoName[32];
 } NODUS_DYNAMIC_DEVICE;
 
 // One adapter, global context. The control device lives for as long as the
