@@ -81,7 +81,12 @@ export default function NodusApp() {
           name: m.name,
           device_type: m.kind === 'capture' ? 'input' : 'virtual',
           is_default: false,
-          original_name: null,
+          // Provenance marker: WE created these via the driver, so they are always
+          // "ours" regardless of the user's custom name. deviceNode()'s isOwn check
+          // matches /nodus/i on name+original_name — without this, a custom-named mic
+          // ("Микрофон для Дискорд") fails isOwn and is misclassified as a THIRD-PARTY
+          // capture source (port-out) instead of our sink (port-in). (t5 fix)
+          original_name: 'Nodus Virtual Audio',
           is_virtual: true,
         })),
     [managed],
