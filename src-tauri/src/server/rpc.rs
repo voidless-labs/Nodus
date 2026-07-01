@@ -110,6 +110,46 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
         }
         "is_engine_running" => to_value(state.engine.is_running()),
 
+        // ── Virtual devices (t5 step 3, S3.5) ──────────────────────────────
+        "list_virtual_devices" => {
+            let list = tokio::task::spawn_blocking(|| {
+                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                ctl.list_devices().map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            to_value(list)
+        }
+        "create_virtual_device" => {
+            let kind = arg_str(args, "kind").ok_or("missing kind")?;
+            let name = arg_str(args, "name").ok_or("missing name")?;
+            let k = match kind.as_str() {
+                "render" => crate::audio::device_control::DeviceKind::Render,
+                "capture" => crate::audio::device_control::DeviceKind::Capture,
+                other => return Err(format!("unknown kind '{other}'")),
+            };
+            let info = tokio::task::spawn_blocking(move || -> Result<_, String> {
+                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                let id = ctl.create_device(k, None, &name).map_err(|e| e.to_string())?;
+                Ok(crate::audio::device_control::VirtualDeviceInfo {
+                    id, kind: k, name, is_static: false, ring_active: false,
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            to_value(info)
+        }
+        "remove_virtual_device" => {
+            let id = args.get("id").and_then(|v| v.as_u64()).ok_or("missing id")? as u32;
+            tokio::task::spawn_blocking(move || {
+                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                ctl.destroy_device(id).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            Ok(Value::Null)
+        }
+
         // ── Settings (t14) ─────────────────────────────────────────────────
         "get_settings" => to_value(state.settings.get()),
         "set_settings" => {

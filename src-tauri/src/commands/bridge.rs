@@ -15,6 +15,7 @@ use crate::{
         devices::{enumerate_audio_devices, AudioDevice},
         virtual_device::{get_virtual_setup, query_virtual_status, VirtualSetupStatus},
         wasapi::ComGuard,
+        device_control::{open_control, DeviceKind, VirtualDeviceInfo},
     },
     detection::process::{detect_audio_processes, AudioProcess, ProcessDetector},
     routing::{engine::RoutingEngine, graph::RoutingGraph, node::RouteId},
@@ -172,6 +173,50 @@ pub async fn stop_engine(engine: State<'_, EngineState>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+// ── Virtual devices (t5 step 3, S3.5) ────────────────────────────────────────
+// Dynamic Nodus virtual devices via the kernel control channel (\\.\NodusControl).
+// All open a short-lived handle per call and run on a blocking thread (DeviceIoControl
+// is a blocking syscall). No driver / older build → a clear error string.
+
+/// List the driver's device table (2 static + up to 8 dynamic).
+#[tauri::command]
+pub async fn list_virtual_devices() -> Result<Vec<VirtualDeviceInfo>, String> {
+    tokio::task::spawn_blocking(|| {
+        let ctl = open_control().map_err(|e| e.to_string())?;
+        ctl.list_devices().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Create a dynamic virtual device (render/capture) with a friendly name; returns it.
+#[tauri::command]
+pub async fn create_virtual_device(kind: String, name: String) -> Result<VirtualDeviceInfo, String> {
+    let k = match kind.as_str() {
+        "render" => DeviceKind::Render,
+        "capture" => DeviceKind::Capture,
+        other => return Err(format!("unknown kind '{other}' (use render|capture)")),
+    };
+    tokio::task::spawn_blocking(move || {
+        let ctl = open_control().map_err(|e| e.to_string())?;
+        let id = ctl.create_device(k, None, &name).map_err(|e| e.to_string())?;
+        Ok(VirtualDeviceInfo { id, kind: k, name, is_static: false, ring_active: false })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Destroy a dynamic virtual device by its driver id (1..8; id 0 is refused).
+#[tauri::command]
+pub async fn remove_virtual_device(id: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let ctl = open_control().map_err(|e| e.to_string())?;
+        ctl.destroy_device(id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ── Scene sync (t17 phase B) ─────────────────────────────────────────────────

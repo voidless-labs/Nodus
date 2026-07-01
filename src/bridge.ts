@@ -448,6 +448,37 @@ export async function setSettings(next: Settings): Promise<Settings | null> {
   return call<Settings>('set_settings', { next });
 }
 
+// ── Virtual devices (t5 step 3 — dynamic Nodus devices via the kernel driver) ──
+
+export interface VirtualDeviceInfo {
+  id: number; // driver id: 0 = static pair, 1..8 = dynamic
+  kind: 'render' | 'capture';
+  name: string;
+  is_static: boolean;
+  ring_active: boolean;
+}
+
+/** Driver device table (2 static + dynamic). Empty when there is no live backend. */
+export async function listVirtualDevices(): Promise<VirtualDeviceInfo[]> {
+  if (!isTauri && !_daemon) return [];
+  return (await call<VirtualDeviceInfo[]>('list_virtual_devices')) ?? [];
+}
+
+/** Create a dynamic virtual device; returns the created entry (or null offline). */
+export async function createVirtualDevice(
+  kind: 'render' | 'capture',
+  name: string,
+): Promise<VirtualDeviceInfo | null> {
+  if (!isTauri && !_daemon) return null;
+  return call<VirtualDeviceInfo>('create_virtual_device', { kind, name });
+}
+
+/** Destroy a dynamic virtual device by driver id (1..8). */
+export async function removeVirtualDevice(id: number): Promise<unknown> {
+  if (!isTauri && !_daemon) return null;
+  return call('remove_virtual_device', { id });
+}
+
 // ── Window controls (custom title bar) ──────────────────────────────────────
 // Lazy import of @tauri-apps/api/window so the plain Vite preview (no Tauri)
 // never loads it; every control is a no-op in the browser.

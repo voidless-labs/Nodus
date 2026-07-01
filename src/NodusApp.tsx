@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { emitEvent, listenAny, winShow, type AudioDevice } from './bridge';
+import {
+  emitEvent,
+  listenAny,
+  winShow,
+  listVirtualDevices,
+  createVirtualDevice as bridgeCreateVirtualDevice,
+  removeVirtualDevice as bridgeRemoveVirtualDevice,
+  type AudioDevice,
+  type VirtualDeviceInfo,
+} from './bridge';
 import { Canvas } from './ui/Canvas';
 import { Graph } from './ui/Graph';
 import { Topbar } from './ui/Topbar';
@@ -43,19 +52,42 @@ export default function NodusApp() {
   const viewCtl = useView(canvasAreaRef);
   const [selection, setSelection] = useState<Set<string>>(new Set());
 
-  // Virtual devices: real ones (backend) + user-created (the "virtual" tab).
-  // Creating a real OS device needs the kernel driver (t5); the UX shell is here.
-  const [createdVirtuals, setCreatedVirtuals] = useState<AudioDevice[]>([]);
-  // The just-created device id — its card opens in name-edit mode (R5 follow-up).
+  // Virtual devices (t5 step 3 S3.5). The dynamic ones are REAL OS devices managed
+  // through the kernel control channel; the driver table is the source of truth.
+  // (Routing a dynamic device through the engine — mapping its WASAPI endpoint to
+  // its ring — completes with t8 name correlation; here we manage create/delete.)
+  const [managed, setManaged] = useState<VirtualDeviceInfo[]>([]);
   const [pendingVirtualEdit, setPendingVirtualEdit] = useState<string | null>(null);
-  const createdIds = useMemo(() => new Set(createdVirtuals.map((d) => d.id)), [createdVirtuals]);
-  const virtualOwn = useMemo(
-    () => [
-      ...backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)),
-      ...createdVirtuals,
-    ],
-    [backend.devices, createdVirtuals],
+  const refreshManaged = useCallback(() => {
+    void listVirtualDevices().then(setManaged).catch((e) => console.error('list_virtual_devices:', e));
+  }, []);
+  useEffect(() => {
+    if (backend.ready) refreshManaged();
+  }, [backend.ready, refreshManaged]);
+
+  // Static Nodus endpoints from the OS enumeration (real, routable — keep as-is).
+  const staticOwn = useMemo(
+    () => backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)),
+    [backend.devices],
   );
+  // Dynamic devices from the driver table, mapped to the card shape. Synthetic id
+  // `nodus:<driverId>` so delete/rename can recover the driver id.
+  const dynamicOwn = useMemo<AudioDevice[]>(
+    () =>
+      managed
+        .filter((m) => !m.is_static)
+        .map((m) => ({
+          id: `nodus:${m.id}`,
+          name: m.name,
+          device_type: m.kind === 'capture' ? 'input' : 'virtual',
+          is_default: false,
+          original_name: null,
+          is_virtual: true,
+        })),
+    [managed],
+  );
+  const virtualOwn = useMemo(() => [...staticOwn, ...dynamicOwn], [staticOwn, dynamicOwn]);
+  const createdIds = useMemo(() => new Set(dynamicOwn.map((d) => d.id)), [dynamicOwn]);
   const virtualOther = useMemo(
     () => backend.devices.filter((d) => d.is_virtual && !isOwnVirtual(d)),
     [backend.devices],
@@ -64,29 +96,46 @@ export default function NodusApp() {
     () => backend.devices.filter((d) => !d.is_virtual),
     [backend.devices],
   );
+
+  const driverIdOf = (synthetic: string): number | null => {
+    const m = /^nodus:(\d+)$/.exec(synthetic);
+    return m ? Number(m[1]) : null;
+  };
+
   const createVirtualDevice = useCallback(() => {
-    const id = `nodus-virtual-${Date.now().toString(36)}`;
-    setCreatedVirtuals((v) => {
-      // Number by OUR virtual devices only (Nodus-branded backend + created).
-      const ownBackend = backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)).length;
-      const n = ownBackend + v.length + 1;
-      return [
-        ...v,
-        // Our virtual mic: a capture endpoint we feed → input + virtual (→ sink on canvas).
-        { id, name: `Nodus Mic ${n}`, device_type: 'input', is_default: false, original_name: null, is_virtual: true },
-      ];
-    });
-    setPendingVirtualEdit(id); // open its name field for the user to set a name
-    // TODO(t5): also create the real OS device + apply the (renamed) name to it.
-  }, [backend.devices]);
-  const renameVirtual = useCallback((id: string, name: string) => {
-    setCreatedVirtuals((v) => v.map((d) => (d.id === id ? { ...d, name } : d)));
-    // TODO(t5): rename the real OS device to match.
-  }, []);
-  const deleteVirtual = useCallback((id: string) => {
-    setCreatedVirtuals((v) => v.filter((d) => d.id !== id));
-    // TODO(t5): remove the real OS device.
-  }, []);
+    const n = managed.filter((m) => !m.is_static).length + 1;
+    void bridgeCreateVirtualDevice('capture', `Nodus Mic ${n}`)
+      .then((info) => {
+        refreshManaged();
+        if (info) setPendingVirtualEdit(`nodus:${info.id}`); // open its name field
+      })
+      .catch((e) => console.error('create_virtual_device:', e));
+  }, [managed, refreshManaged]);
+
+  // No SET_NAME IOCTL yet (ADR §6.2): rename = destroy + recreate with the new name.
+  const renameVirtual = useCallback(
+    (id: string, name: string) => {
+      const driverId = driverIdOf(id);
+      const dev = managed.find((m) => m.id === driverId && !m.is_static);
+      if (driverId == null || !dev) return;
+      void bridgeRemoveVirtualDevice(driverId)
+        .then(() => bridgeCreateVirtualDevice(dev.kind, name))
+        .then(() => refreshManaged())
+        .catch((e) => console.error('rename_virtual_device:', e));
+    },
+    [managed, refreshManaged],
+  );
+
+  const deleteVirtual = useCallback(
+    (id: string) => {
+      const driverId = driverIdOf(id);
+      if (driverId == null) return;
+      void bridgeRemoveVirtualDevice(driverId)
+        .then(() => refreshManaged())
+        .catch((e) => console.error('remove_virtual_device:', e));
+    },
+    [refreshManaged],
+  );
 
   // Load a preset, bound to the user's real devices/processes so it routes (R18).
   const loadPreset = useCallback(
@@ -100,13 +149,15 @@ export default function NodusApp() {
       store.replaceScene(
         bindScene(buildPreset(id), {
           output: out,
+          // Bind a routable Nodus mic (static endpoint); dynamic-device routing
+          // lands with t8 correlation.
           input: inp,
-          virtualMic: virtualOwn[0],
+          virtualMic: staticOwn.find((d) => d.device_type === 'input') ?? staticOwn[0],
           processes: backend.processes,
         }),
       );
     },
-    [backend.devices, backend.processes, virtualOwn, store],
+    [backend.devices, backend.processes, staticOwn, store],
   );
 
   // Turning the engine on starts it, then pushes the current graph (proven order).
@@ -313,7 +364,7 @@ export default function NodusApp() {
     (payload: PlacePayload, world: { x: number; y: number }) => {
       const pos = { x: world.x - 30, y: world.y - 24 };
       if (payload.kind === 'device') {
-        const d = [...backend.devices, ...createdVirtuals].find((x) => x.id === payload.id);
+        const d = [...backend.devices, ...dynamicOwn].find((x) => x.id === payload.id);
         if (d) store.addDevice(d, pos);
       } else if (payload.kind === 'process') {
         const p = backend.processes.find((x) => x.exe_name === payload.id);
@@ -322,7 +373,7 @@ export default function NodusApp() {
         store.addNodeType(payload.id, pos);
       }
     },
-    [backend.devices, backend.processes, createdVirtuals, store],
+    [backend.devices, backend.processes, dynamicOwn, store],
   );
 
   // Pointer-based drag from the palettes onto the canvas (WebView2-safe).
