@@ -136,10 +136,18 @@ void CMiniportWaveCaptureStream::FillLoop()
         LONGLONG elapsed = now.QuadPart - m_Start.QuadPart;
         if (elapsed <= 0) continue;
 
-        // Fill ONE TICK AHEAD of the position clock: clients read right behind
-        // GetPosition, and without the lead the 10 ms at the read edge are
-        // whatever the previous lap left there (stale data, audible tearing).
-        elapsed += 10 * 10000;
+        // Fill AHEAD of the position clock by a margin that safely exceeds this
+        // thread's wake interval. GetPosition advances continuously in real time,
+        // but this thread only refills on wakeups — and a PASSIVE_LEVEL system
+        // thread waking on a relative timeout fires at the system timer
+        // granularity (~15.6 ms default) plus scheduling jitter, NOT the 10 ms
+        // requested. With only a 10 ms lead the reported position periodically
+        // outruns m_FilledBytes, so clients read the PREVIOUS lap's samples at the
+        // read edge: a ~64 Hz buzz + clicks that make speech unintelligible.
+        // A 40 ms lead keeps the fill head ahead of the position across a full
+        // wake interval + jitter; the added ~40 ms of mic latency is inaudible for
+        // a virtual microphone. (t10 — capture audio-quality fix)
+        elapsed += 40 * 10000;
 
         ULONGLONG target = ((ULONGLONG)elapsed * NODUS_AVG_BYTES) / 10000000ULL;
         target -= target % NODUS_BLOCK_ALIGN;
