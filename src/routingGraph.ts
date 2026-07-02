@@ -55,7 +55,14 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
     backendNodes.push({
       id: n.id,
       node_type: type,
-      label: n.name,
+      // The engine flags the Nodus mic destination by matching this label
+      // (is_nodus_virtual_mic_name → writes into the kernel mic ring). deviceNode
+      // strips the "(Nodus …)" suffix from the display name, so a mic-sink node's
+      // n.name is e.g. "Микрофон" and no longer matches → the route was silently
+      // treated as a normal WASAPI render into a capture endpoint (no audio). Send
+      // the canonical marker label for our mic sinks so detection is robust; the
+      // visible node name (n.name) is unaffected. (mic regression fix)
+      label: n.micSink ? 'Nodus Virtual Mic' : n.name,
       device_id: n.deviceId ?? '',
       exe_name: n.exeName ?? null,
     });
