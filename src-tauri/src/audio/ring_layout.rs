@@ -27,9 +27,19 @@ pub(crate) const RING_BYTES: usize = 384_000; // 2 s of 48 kHz stereo 16-bit
 
 /// Render ring section (virtual speaker → Nodus).
 pub(crate) const RENDER_SECTION_NAME: &str = "Global\\NodusRing-0";
-/// Mic ring section (Nodus → virtual microphone). World-writable: created by
-/// the driver with an everyone-write DACL so the non-admin app can produce.
+/// Mic ring section for the STATIC virtual microphone (ring id 0). World-writable:
+/// created by the driver with an everyone-write DACL so the non-admin app can produce.
+/// Prefer `mic_section_name(id)`; kept as the documented static name / test anchor.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const MIC_SECTION_NAME: &str = "Global\\NodusRing-mic-0";
+
+/// Mic ring section for a given ring id — `Global\NodusRing-mic-<id>`, matching the
+/// driver's `NODUS_RING_MIC_NAME_KERNEL` (common.h). id 0 = static pair, 1..8 =
+/// dynamically-created virtual mics (their driver device id IS the ring id).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn mic_section_name(ring_id: u32) -> String {
+    format!("Global\\NodusRing-mic-{ring_id}")
+}
 
 /// Matches NODUS_RING_BUFFER in common.h: 64-byte header + data.
 /// All field offsets are naturally aligned, so plain `repr(C)` reproduces the
@@ -81,5 +91,8 @@ mod tests {
         assert_eq!(RING_BYTES, 2 * 48_000 * 2 * 2);
         assert_eq!(RENDER_SECTION_NAME, "Global\\NodusRing-0");
         assert_eq!(MIC_SECTION_NAME, "Global\\NodusRing-mic-0");
+        // Static ring 0 must equal the const; dynamic ids map to their own section.
+        assert_eq!(mic_section_name(0), MIC_SECTION_NAME);
+        assert_eq!(mic_section_name(3), "Global\\NodusRing-mic-3");
     }
 }

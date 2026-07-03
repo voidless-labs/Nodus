@@ -158,7 +158,7 @@ pub mod platform {
     use tracing::{debug, warn};
 
     use crate::audio::ring_layout::{
-        RingHeader, MIC_SECTION_NAME, RING_BYTES, RING_MAGIC, RING_VERSION,
+        mic_section_name, RingHeader, RING_BYTES, RING_MAGIC, RING_VERSION,
     };
     use windows::{
         core::PCWSTR,
@@ -179,8 +179,9 @@ pub mod platform {
     unsafe impl Send for MicRingView {}
 
     impl MicRingView {
-        fn open() -> Result<Self, String> {
-            let name: Vec<u16> = format!("{MIC_SECTION_NAME}\0").encode_utf16().collect();
+        fn open(ring_id: u32) -> Result<Self, String> {
+            let section = mic_section_name(ring_id);
+            let name: Vec<u16> = format!("{section}\0").encode_utf16().collect();
 
             // SAFETY: standard Win32 section open/map; `name` is NUL-terminated
             // and outlives the call. Header validation below guards against
@@ -192,7 +193,7 @@ pub mod platform {
                     PCWSTR(name.as_ptr()),
                 )
                 .map_err(|e| {
-                    format!("{MIC_SECTION_NAME} section not found — is nodus_audio.sys loaded? {e}")
+                    format!("{section} section not found — is nodus_audio.sys loaded? {e}")
                 })?;
 
                 let view = MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
@@ -288,13 +289,17 @@ pub mod platform {
     pub struct VirtualRender {
         /// Format of the SOURCE frames (rate/channels of what the receiver yields).
         format: AudioFormat,
+        /// Kernel mic ring to write into — 0 = static mic, 1..8 = a dynamically
+        /// created virtual mic (its driver device id). (t8)
+        ring_id: u32,
         stop_flag: Arc<AtomicBool>,
     }
 
     impl VirtualRender {
-        pub fn new(format: AudioFormat) -> Self {
+        pub fn new(format: AudioFormat, ring_id: u32) -> Self {
             Self {
                 format,
+                ring_id,
                 stop_flag: Arc::new(AtomicBool::new(false)),
             }
         }
@@ -311,6 +316,7 @@ pub mod platform {
             pan: Arc<AtomicU32>,
         ) {
             let format = self.format;
+            let ring_id = self.ring_id;
             let stop = Arc::clone(&self.stop_flag);
             stop.store(false, Ordering::SeqCst);
 
@@ -319,7 +325,7 @@ pub mod platform {
                 // ~15.6 ms and the writer drains the channel in bursts.
                 let _timer = crate::audio::session::TimerResolutionGuard::acquire();
 
-                let view = match MicRingView::open() {
+                let view = match MicRingView::open(ring_id) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!(
@@ -352,9 +358,11 @@ pub mod platform {
                 let mut overrun_noted = false;
 
                 debug!(
-                    "VirtualRender: writing to {MIC_SECTION_NAME} from counter {base} \
+                    "VirtualRender: writing to {} from counter {base} \
                      (+{LEAD_BYTES}-byte lead) (source {} Hz, {} ch)",
-                    format.sample_rate, format.channels
+                    mic_section_name(ring_id),
+                    format.sample_rate,
+                    format.channels
                 );
 
                 while !stop.load(Ordering::SeqCst) {
@@ -413,7 +421,7 @@ pub mod platform {
     pub struct VirtualRender;
 
     impl VirtualRender {
-        pub fn new(_format: AudioFormat) -> Self {
+        pub fn new(_format: AudioFormat, _ring_id: u32) -> Self {
             Self
         }
         pub fn start(

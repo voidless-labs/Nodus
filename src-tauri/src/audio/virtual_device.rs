@@ -47,6 +47,19 @@ pub fn is_nodus_virtual_mic_name(name: &str) -> bool {
     low.contains("nodus") && (low.contains("mic") || low.contains("микрофон"))
 }
 
+/// Which kernel mic ring a virtual-mic DESTINATION writes into. The UI gives a
+/// dynamically-created device the synthetic id `nodus:<driverId>`, and the driver
+/// device id IS the ring id (ring `NodusRing-mic-<id>`). So a node whose device_id
+/// is `nodus:3` routes to ring 3; the STATIC mic (a real WASAPI endpoint id, no
+/// `nodus:` prefix) falls back to ring 0. Lets several distinct virtual mics carry
+/// independent audio instead of everyone sharing `mic-0`. (t8)
+pub fn ring_id_from_device_id(device_id: &str) -> u32 {
+    device_id
+        .strip_prefix("nodus:")
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
 /// Map a raw VB-Audio device name to a Nodus-branded label shown in the UI.
 /// Returns None if the device doesn't need renaming.
 pub fn nodus_label(device_name: &str) -> Option<&'static str> {
@@ -343,6 +356,18 @@ mod tests {
         assert!(!is_nodus_virtual_mic_name("Динамики (Nodus Virtual Audio)"));
         // A microphone, but not Nodus.
         assert!(!is_nodus_virtual_mic_name("Микрофон (Realtek High Definition Audio)"));
+    }
+
+    #[test]
+    fn ring_id_parsed_from_synthetic_device_id() {
+        // Dynamic devices: synthetic `nodus:<driverId>` → that ring id.
+        assert_eq!(ring_id_from_device_id("nodus:1"), 1);
+        assert_eq!(ring_id_from_device_id("nodus:8"), 8);
+        // Static mic / real WASAPI endpoint ids → ring 0.
+        assert_eq!(ring_id_from_device_id("{0.0.1.00000000}.{abcd-…}"), 0);
+        assert_eq!(ring_id_from_device_id(""), 0);
+        assert_eq!(ring_id_from_device_id("nodus:"), 0);
+        assert_eq!(ring_id_from_device_id("nodus:x"), 0);
     }
 
     #[test]

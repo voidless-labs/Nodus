@@ -496,8 +496,12 @@ impl RoutingEngine {
             // CAPTURE device — run_render would rightly refuse it). VirtualRender
             // converts source format → 48k/stereo/i16 itself. If the driver isn't
             // loaded, the writer thread warns once and exits — route stays silent
-            // but alive (driverless fallback policy).
-            let vr = VirtualRender::new(capture_format);
+            // but alive (driverless fallback policy). The ring id comes from the
+            // destination device id: `nodus:<N>` → dynamic mic N, else the static
+            // mic 0 — so distinct virtual mics carry independent audio. (t8)
+            let ring_id =
+                crate::audio::virtual_device::ring_id_from_device_id(&ar.to_device_id);
+            let vr = VirtualRender::new(capture_format, ring_id);
             vr.start(
                 receiver,
                 Arc::clone(&volume),
