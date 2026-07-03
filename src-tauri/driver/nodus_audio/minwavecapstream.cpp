@@ -235,12 +235,11 @@ void CMiniportWaveCaptureStream::FillLoop()
 
         if ((KSSTATE)m_State != KSSTATE_RUN || !m_Buffer) continue;
 
-        LARGE_INTEGER now;
-        KeQuerySystemTimePrecise(&now);
+        LARGE_INTEGER now = KeQueryPerformanceCounter(nullptr);
         LONGLONG elapsed = now.QuadPart - m_Start.QuadPart;
         if (elapsed <= 0) continue;
 
-        ULONGLONG target = ((ULONGLONG)elapsed * NODUS_AVG_BYTES) / 10000000ULL;
+        ULONGLONG target = ((ULONGLONG)elapsed * NODUS_AVG_BYTES) / (ULONGLONG)m_QpcFreq.QuadPart;
 
         // Fill AHEAD of the reported position by a lead sized to the cyclic buffer
         // audiodg actually allocated (m_BufBytes — observed as small as 8 KB ≈
@@ -344,7 +343,7 @@ void CMiniportWaveCaptureStream::FillLoop()
         if (diagAvail > diagAvailMax) diagAvailMax = diagAvail;
         if (diagT0 == 0) {
             diagT0 = now.QuadPart;
-        } else if (now.QuadPart - diagT0 >= 10000000LL) {   // 1 s in 100ns units
+        } else if (now.QuadPart - diagT0 >= m_QpcFreq.QuadPart) {   // 1 s in QPC ticks
             LONG posCalls = InterlockedExchange(&m_PosCalls, 0);
             LONG clampHits = InterlockedExchange(&m_ClampHits, 0);
             LONG clampMax  = InterlockedExchange(&m_ClampMaxOver, 0);
@@ -377,7 +376,10 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetState(KSSTATE State)
     // каша" mechanism.
     DbgPrint("Nodus: capture SetState %d (was %d)\n", (int)State, (int)m_State);
     if (State == KSSTATE_RUN && (KSSTATE)m_State != KSSTATE_RUN) {
-        KeQuerySystemTimePrecise(&m_Start);
+        // Time the position off QPC — the same clock audiodg's engine uses — so its
+        // device→engine rate-converter locks 1:1 instead of nearest-neighbour
+        // dropping/duplicating ~2/3 of samples (the "orc"). (t10)
+        m_Start = KeQueryPerformanceCounter(&m_QpcFreq);
         m_FilledBytes = 0;
         m_LastNotifyPeriod = 0;   // fresh notification cadence for the new RUN
         if (m_Miniport) m_Miniport->ClaimReader(this);
@@ -398,8 +400,8 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITIO
         Pos->PlayOffset = 0; Pos->WriteOffset = 0;
         return STATUS_SUCCESS;
     }
-    LARGE_INTEGER now; KeQuerySystemTimePrecise(&now);
-    LONGLONG bytes = ((now.QuadPart - m_Start.QuadPart) * NODUS_AVG_BYTES) / 10000000LL;
+    LARGE_INTEGER now = KeQueryPerformanceCounter(nullptr);
+    LONGLONG bytes = ((now.QuadPart - m_Start.QuadPart) * NODUS_AVG_BYTES) / m_QpcFreq.QuadPart;
     if (bytes < 0) bytes = 0;
     // Never report a position past what the fill thread has actually written.
     // The reported position rides the smooth wall clock, but the cyclic buffer is

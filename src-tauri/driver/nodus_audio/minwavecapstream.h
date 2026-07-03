@@ -22,6 +22,7 @@ public:
           m_ThreadHandle(nullptr), m_ThreadObject(nullptr)
     {
         m_Start.QuadPart = 0;
+        m_QpcFreq.QuadPart = 1;   // real value latched at RUN; avoid div-by-zero
         KeInitializeEvent(&m_StopEvent, NotificationEvent, FALSE);
     }
     ~CMiniportWaveCaptureStream();
@@ -47,7 +48,9 @@ private:
     PMDL          m_Mdl;
     ULONG         m_BufBytes;
     volatile LONG m_State;        // KSSTATE
-    LARGE_INTEGER m_Start;        // 100ns time at the RUN transition
+    LARGE_INTEGER m_Start;        // QPC counter at the RUN transition
+    LARGE_INTEGER m_QpcFreq;      // QPC ticks/sec — position uses QPC (audiodg's engine
+                                  // clock) so its rate-converter locks 1:1 (t10)
     ULONGLONG     m_FilledBytes;  // bytes written into the cyclic buffer since RUN
     volatile LONG m_PosCalls;     // t10 diag: GetPosition polls since last capdiag print
     volatile LONG m_ClampHits;    // t10 diag: times GetPosition clamped (pos would outrun fill)
