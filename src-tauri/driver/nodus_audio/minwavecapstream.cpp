@@ -41,9 +41,21 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateAudioBuffer(
     MEMORY_CACHING_TYPE* OutCache)
 {
     if (m_Buffer) return STATUS_ALREADY_COMMITTED;
+    ULONG reqIn = RequestedSize;
     if (RequestedSize == 0) RequestedSize = NODUS_AVG_BYTES / 10; // ~100 ms default
     RequestedSize -= RequestedSize % NODUS_BLOCK_ALIGN;           // keep frames whole
     if (RequestedSize == 0) return STATUS_INVALID_PARAMETER;
+
+    // audiodg can request a tiny buffer (~8 KB ≈ 42 ms observed). We expose no
+    // position register/notification (GetPositionRegister/GetClockRegister return
+    // NOT_SUPPORTED), so audiodg POLLS GetPosition — and a buffer that wraps that
+    // fast loses whole laps between polls, so the stream plays back slow and torn
+    // (time-stretched buzz). Enforce a generous minimum so the buffer wraps far
+    // slower than any reasonable poll rate. (t10)
+    ULONG minBytes = NODUS_AVG_BYTES / 4;   // ~250 ms
+    minBytes -= minBytes % NODUS_BLOCK_ALIGN;
+    if (RequestedSize < minBytes) RequestedSize = minBytes;
+    DbgPrint("Nodus: capture buffer req=%lu actual=%lu\n", reqIn, RequestedSize);
 
     // ExAllocatePool2 zero-initializes — the buffer starts out as valid silence,
     // so a client reading before the first fill tick still gets clean samples.
@@ -158,7 +170,9 @@ void CMiniportWaveCaptureStream::FillLoop()
         // head sat inside the read window and tore the audio. Track the buffer at
         // ~40 %: for an 8 KB buffer that is ~17 ms — clear of both edges — and it
         // scales automatically if audiodg picks a different buffer size. (t10)
-        ULONGLONG lead = (ULONGLONG)m_BufBytes * 2 / 5;
+        ULONGLONG lead = (NODUS_AVG_BYTES * 40) / 1000;      // ~40 ms
+        ULONGLONG leadCap = (ULONGLONG)m_BufBytes * 2 / 5;   // never > 40 % of buffer
+        if (lead > leadCap) lead = leadCap;
         lead -= lead % NODUS_BLOCK_ALIGN;
         target += lead;
         target -= target % NODUS_BLOCK_ALIGN;
@@ -236,11 +250,12 @@ void CMiniportWaveCaptureStream::FillLoop()
         if (diagT0 == 0) {
             diagT0 = now.QuadPart;
         } else if (now.QuadPart - diagT0 >= 10000000LL) {   // 1 s in 100ns units
+            LONG posCalls = InterlockedExchange(&m_PosCalls, 0);
             DbgPrint("Nodus capdiag: ticks=%lu zeroTicks=%lu take=%llu zero=%llu "
-                     "avail[%llu..%llu] resync=%lu buf=%lu\n",
+                     "avail[%llu..%llu] resync=%lu buf=%lu posCalls=%ld\n",
                      diagTicks, diagZeroTicks, diagTake, diagZero,
                      (diagAvailMin == ~0ULL ? 0ULL : diagAvailMin), diagAvailMax,
-                     diagResync, m_BufBytes);
+                     diagResync, m_BufBytes, posCalls);
             diagT0 = now.QuadPart;
             diagTicks = diagZeroTicks = diagResync = 0;
             diagTake = diagZero = 0;
@@ -272,6 +287,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetState(KSSTATE State)
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITION Pos)
 {
     if (!Pos) return STATUS_INVALID_PARAMETER;
+    InterlockedIncrement(&m_PosCalls);   // t10 diag: how often audiodg polls us
     if ((KSSTATE)m_State != KSSTATE_RUN || m_BufBytes == 0) {
         Pos->PlayOffset = 0; Pos->WriteOffset = 0;
         return STATUS_SUCCESS;

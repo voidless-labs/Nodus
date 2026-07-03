@@ -16,7 +16,7 @@ public:
     CMiniportWaveCaptureStream(PUNKNOWN outer)
         : CUnknown(outer), m_Miniport(nullptr), m_Ring(nullptr),
           m_Buffer(nullptr), m_Mdl(nullptr), m_BufBytes(0),
-          m_State(KSSTATE_STOP), m_FilledBytes(0),
+          m_State(KSSTATE_STOP), m_FilledBytes(0), m_PosCalls(0),
           m_ThreadHandle(nullptr), m_ThreadObject(nullptr)
     {
         m_Start.QuadPart = 0;
@@ -44,6 +44,7 @@ private:
     volatile LONG m_State;        // KSSTATE
     LARGE_INTEGER m_Start;        // 100ns time at the RUN transition
     ULONGLONG     m_FilledBytes;  // bytes written into the cyclic buffer since RUN
+    volatile LONG m_PosCalls;     // t10 diag: GetPosition polls since last capdiag print
 
     HANDLE   m_ThreadHandle;
     PKTHREAD m_ThreadObject;
