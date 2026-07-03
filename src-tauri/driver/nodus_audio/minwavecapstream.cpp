@@ -123,6 +123,15 @@ VOID CMiniportWaveCaptureStream::FillThreadEntry(PVOID Context)
 void CMiniportWaveCaptureStream::FillLoop()
 {
     NODUS_RING_BUFFER* ring = m_Ring;
+
+    // t10 diagnostics — a ~1 s summary in DebugView of what this loop actually
+    // does to the (known-clean) ring data: is it underrunning (zero-fill), how
+    // deep is the ring backlog (avail), and how often does it resync? This tells
+    // us whether the buzz is ring underrun or something downstream.
+    ULONGLONG diagT0 = 0;
+    ULONG     diagTicks = 0, diagZeroTicks = 0, diagResync = 0;
+    ULONGLONG diagTake = 0, diagZero = 0, diagAvailMin = ~0ULL, diagAvailMax = 0;
+
     for (;;) {
         LARGE_INTEGER timeout;
         timeout.QuadPart = -10 * 10000;   // 10 ms, relative
@@ -163,6 +172,7 @@ void CMiniportWaveCaptureStream::FillLoop()
 
         // Pull whatever Nodus has produced (single consumer of the mic ring).
         ULONGLONG take = 0;
+        ULONGLONG diagAvail = 0;
         if (ring && m_Miniport && m_Miniport->ClaimReader(this)) {
             ULONGLONG w = ring->WriteBytes;   // advanced by Nodus userspace
             KeMemoryBarrier();                // read the counter before the data
@@ -175,8 +185,10 @@ void CMiniportWaveCaptureStream::FillLoop()
                 r = w - 4800ULL * 2;
                 r -= r % NODUS_BLOCK_ALIGN;
                 avail = w - r;
+                diagResync++;
             }
             avail -= avail % NODUS_BLOCK_ALIGN;   // hand out whole frames only
+            diagAvail = avail;
             take = (avail < delta) ? avail : delta;
 
             ULONGLONG src = r;
@@ -211,6 +223,27 @@ void CMiniportWaveCaptureStream::FillLoop()
         }
 
         m_FilledBytes = target;
+
+        // ── t10 diagnostics: accumulate, emit once per ~1 s ──────────────────
+        diagTicks++;
+        diagTake += take;
+        diagZero += (delta - take);
+        if (take < delta) diagZeroTicks++;
+        if (diagAvail < diagAvailMin) diagAvailMin = diagAvail;
+        if (diagAvail > diagAvailMax) diagAvailMax = diagAvail;
+        if (diagT0 == 0) {
+            diagT0 = now.QuadPart;
+        } else if (now.QuadPart - diagT0 >= 10000000LL) {   // 1 s in 100ns units
+            DbgPrint("Nodus capdiag: ticks=%lu zeroTicks=%lu take=%llu zero=%llu "
+                     "avail[%llu..%llu] resync=%lu buf=%lu\n",
+                     diagTicks, diagZeroTicks, diagTake, diagZero,
+                     (diagAvailMin == ~0ULL ? 0ULL : diagAvailMin), diagAvailMax,
+                     diagResync, m_BufBytes);
+            diagT0 = now.QuadPart;
+            diagTicks = diagZeroTicks = diagResync = 0;
+            diagTake = diagZero = 0;
+            diagAvailMin = ~0ULL; diagAvailMax = 0;
+        }
     }
 }
 
