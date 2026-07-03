@@ -303,7 +303,17 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITIO
     LARGE_INTEGER now; KeQuerySystemTimePrecise(&now);
     LONGLONG bytes = ((now.QuadPart - m_Start.QuadPart) * NODUS_AVG_BYTES) / 10000000LL;
     if (bytes < 0) bytes = 0;
-    ULONG cap = (ULONG)(bytes % m_BufBytes);
+    // Never report a position past what the fill thread has actually written.
+    // The reported position rides the smooth wall clock, but the cyclic buffer is
+    // filled only on (jittery) fill wakeups. If a wakeup runs late the clock would
+    // point into an unfilled region and the client would read the PREVIOUS lap —
+    // stale, torn "orc" audio. Clamping to m_FilledBytes makes that impossible by
+    // construction: a late fill becomes a brief position stall + catch-up (which
+    // audiodg tolerates, like packet-based USB audio) instead of garbage samples.
+    // Belt-and-suspenders with the 1 ms fill cadence. (t10, per Fable 5 review)
+    ULONGLONG filled = m_FilledBytes;   // x64: aligned 64-bit read is atomic
+    if ((ULONGLONG)bytes > filled) bytes = (LONGLONG)filled;
+    ULONG cap = (ULONG)((ULONGLONG)bytes % m_BufBytes);
     // Capture semantics: clients read BEHIND this position; the fill thread
     // writes the buffer forward against the same clock.
     Pos->PlayOffset  = cap;
