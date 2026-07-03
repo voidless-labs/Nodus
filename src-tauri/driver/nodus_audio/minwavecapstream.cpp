@@ -46,15 +46,12 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateAudioBuffer(
     RequestedSize -= RequestedSize % NODUS_BLOCK_ALIGN;           // keep frames whole
     if (RequestedSize == 0) return STATUS_INVALID_PARAMETER;
 
-    // audiodg can request a tiny buffer (~8 KB ≈ 42 ms observed). We expose no
-    // position register/notification (GetPositionRegister/GetClockRegister return
-    // NOT_SUPPORTED), so audiodg POLLS GetPosition — and a buffer that wraps that
-    // fast loses whole laps between polls, so the stream plays back slow and torn
-    // (time-stretched buzz). Enforce a generous minimum so the buffer wraps far
-    // slower than any reasonable poll rate. (t10)
-    ULONG minBytes = NODUS_AVG_BYTES / 4;   // ~250 ms
-    minBytes -= minBytes % NODUS_BLOCK_ALIGN;
-    if (RequestedSize < minBytes) RequestedSize = minBytes;
+    // NOTE: we must honor audiodg's requested size — WaveRT requires the actual
+    // buffer to be no larger than requested; returning more makes the stream fail
+    // to open (-9999 host error). audiodg picks a tiny buffer (~8 KB ≈ 42 ms) and,
+    // since we expose no position register (GetPositionRegister returns
+    // NOT_SUPPORTED), it POLLS GetPosition. Log requested/actual + poll rate
+    // (posCalls in capdiag) so we can see if that poll aliases against the wrap.
     DbgPrint("Nodus: capture buffer req=%lu actual=%lu\n", reqIn, RequestedSize);
 
     // ExAllocatePool2 zero-initializes — the buffer starts out as valid silence,
