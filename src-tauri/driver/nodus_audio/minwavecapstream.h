@@ -19,6 +19,7 @@ public:
           m_State(KSSTATE_STOP), m_FilledBytes(0), m_PosCalls(0),
           m_ClampHits(0), m_ClampMaxOver(0),
           m_NotifyEvent(nullptr), m_NotifyPeriodBytes(0), m_LastNotifyPeriod(0),
+          m_PosReg(nullptr),
           m_ThreadHandle(nullptr), m_ThreadObject(nullptr)
     {
         m_Start.QuadPart = 0;
@@ -62,6 +63,12 @@ private:
     PKEVENT   m_NotifyEvent;       // audiodg's event, signalled once per period
     ULONG     m_NotifyPeriodBytes; // buffer / NotificationCount
     ULONGLONG m_LastNotifyPeriod;  // last period index we signalled
+
+    // WaveRT position register: a page of non-paged memory PortCls maps into
+    // audiodg so it reads the record cursor directly. Exposing it is the gate to
+    // audiodg's RT-pump (vs the legacy KS-pump whose rate-servo caused the "orc").
+    // The fill thread writes the current byte offset here every tick. (t10)
+    volatile LONG* m_PosReg;
 
     HANDLE   m_ThreadHandle;
     PKTHREAD m_ThreadObject;

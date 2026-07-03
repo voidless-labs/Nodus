@@ -28,6 +28,10 @@ NTSTATUS CMiniportWaveCaptureStream::Init(CMiniportWaveCapture* Miniport)
 CMiniportWaveCaptureStream::~CMiniportWaveCaptureStream()
 {
     FreeAudioBuffer(m_Mdl, m_BufBytes);   // joins the fill thread first
+    if (m_PosReg) {                        // safe: the fill thread is stopped above
+        ExFreePoolWithTag((PVOID)m_PosReg, NODUS_POOL_TAG);
+        m_PosReg = nullptr;
+    }
     if (m_Miniport) {
         m_Miniport->ReleaseReader(this);
         PMINIPORTWAVERT(m_Miniport)->Release();
@@ -239,7 +243,8 @@ void CMiniportWaveCaptureStream::FillLoop()
         LONGLONG elapsed = now.QuadPart - m_Start.QuadPart;
         if (elapsed <= 0) continue;
 
-        ULONGLONG target = ((ULONGLONG)elapsed * NODUS_AVG_BYTES) / (ULONGLONG)m_QpcFreq.QuadPart;
+        ULONGLONG raw = ((ULONGLONG)elapsed * NODUS_AVG_BYTES) / (ULONGLONG)m_QpcFreq.QuadPart;
+        ULONGLONG target = raw;
 
         // Fill AHEAD of the reported position by a lead sized to the cyclic buffer
         // audiodg actually allocated (m_BufBytes — observed as small as 8 KB ≈
@@ -322,6 +327,15 @@ void CMiniportWaveCaptureStream::FillLoop()
 
         m_FilledBytes = target;
 
+        // Publish the record cursor to the mapped position register (raw clock
+        // position, frame-aligned, clamped to what we've filled). audiodg reads it
+        // directly → RT-pump instead of the legacy resampling KS-pump. (t10)
+        if (m_PosReg) {
+            ULONGLONG pos = (raw > m_FilledBytes) ? m_FilledBytes : raw;
+            pos -= pos % NODUS_BLOCK_ALIGN;
+            *m_PosReg = (LONG)(pos % m_BufBytes);
+        }
+
         // Event-driven WaveRT: signal audiodg once per notification period filled,
         // so it reads on our stable wall-clock schedule instead of resampling a
         // polled position (the nearest-neighbor ±1 "orc"). Signal at most once per
@@ -382,6 +396,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetState(KSSTATE State)
         m_Start = KeQueryPerformanceCounter(&m_QpcFreq);
         m_FilledBytes = 0;
         m_LastNotifyPeriod = 0;   // fresh notification cadence for the new RUN
+        if (m_PosReg) *m_PosReg = 0;
         if (m_Miniport) m_Miniport->ClaimReader(this);
         // Publish m_Start/m_FilledBytes before the fill thread can see RUN.
         // (A PAUSE→RUN racing a mid-iteration fill can at worst rewrite one
@@ -421,6 +436,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITIO
         if (over > m_ClampMaxOver) m_ClampMaxOver = over;   // racy max — diag only
         bytes = (LONGLONG)filled;
     }
+    bytes -= bytes % NODUS_BLOCK_ALIGN;   // real hardware reports frame-aligned positions
     ULONG cap = (ULONG)((ULONGLONG)bytes % m_BufBytes);
     // Capture semantics: clients read BEHIND this position; the fill thread
     // writes the buffer forward against the same clock.
@@ -429,9 +445,27 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITIO
     return STATUS_SUCCESS;
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPositionRegister(PKSRTAUDIO_HWREGISTER)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPositionRegister(PKSRTAUDIO_HWREGISTER Reg)
 {
-    return STATUS_NOT_SUPPORTED; // clients fall back to GetPosition()
+    if (!Reg) return STATUS_INVALID_PARAMETER;
+    // Back the register with a dedicated page of non-paged memory (page-aligned →
+    // PortCls maps the whole page to audiodg cleanly). The fill thread writes the
+    // current byte offset in the cyclic buffer here; audiodg reads it directly,
+    // which is what lets it use the RT-pump instead of the legacy KS-pump. (t10)
+    if (!m_PosReg) {
+        m_PosReg = (volatile LONG*)ExAllocatePool2(POOL_FLAG_NON_PAGED, PAGE_SIZE, NODUS_POOL_TAG);
+        if (!m_PosReg) return STATUS_INSUFFICIENT_RESOURCES;
+        *m_PosReg = 0;
+    }
+    Reg->Register    = (PVOID)m_PosReg;
+    Reg->Width       = 32;
+    Reg->Numerator   = 1;   // register value is already the byte offset
+    Reg->Denominator = 1;
+    // Honest granularity: the fill thread refreshes the register every ~3 ms.
+    Reg->Accuracy    = (NODUS_AVG_BYTES * 3) / 1000; // ~576 bytes
+    Reg->Accuracy   -= Reg->Accuracy % NODUS_BLOCK_ALIGN;
+    DbgPrint("Nodus: capture GetPositionRegister -> %p acc=%lu\n", m_PosReg, Reg->Accuracy);
+    return STATUS_SUCCESS;
 }
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetClockRegister(PKSRTAUDIO_HWREGISTER)
