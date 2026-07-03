@@ -41,6 +41,18 @@ path = "src/bin/device_ctl.rs"
 name = "mic-route"
 path = "src/bin/mic_route.rs"
 
+[[bin]]
+name = "mic-ring-dump"
+path = "src/bin/mic_ring_dump.rs"
+
+[[bin]]
+name = "ramp-check"
+path = "src/bin/ramp_check.rs"
+
+[[bin]]
+name = "mic-exclusive-dump"
+path = "src/bin/mic_exclusive_dump.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
@@ -53,6 +65,9 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Rolling daily file log so the engine's diagnostics survive an installer launch
+# (a GUI-subsystem app has no console). See init_logging() in main.rs.
+tracing-appender = "0.2"
 uuid = { version = "1", features = ["v4"] }
 dashmap = "5"
 parking_lot = "0.12"

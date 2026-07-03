@@ -14,6 +14,44 @@ use tauri::{
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// Initialise logging: always to stdout (dev console), and — when a Windows
+/// `%APPDATA%` exists — additionally to a rolling daily file at
+/// `%APPDATA%\com.nodus.app\logs\nodus.log`. This is what makes engine
+/// diagnostics (WASAPI errors, VirtualRender lagged/overrun/format) visible when
+/// the app is launched from the installer, which has no console. Default level
+/// `info,nodus=debug` so our own debug lines are captured without third-party spam.
+/// The returned guard flushes the non-blocking file writer; keep it alive for the
+/// whole process (bound in `main`).
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::{fmt, prelude::*};
+
+    let default = "info,nodus=debug";
+    let make_filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let dir = std::path::Path::new(&appdata).join("com.nodus.app").join("logs");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            // Fixed filename (not date-suffixed) so the path is exactly
+            // `<dir>\nodus.log` — easy to find and share. It grows across runs;
+            // it's a diagnostic log the user can delete freely.
+            let (nb, guard) = tracing_appender::non_blocking(
+                tracing_appender::rolling::never(&dir, "nodus.log"),
+            );
+            tracing_subscriber::registry()
+                .with(make_filter())
+                .with(fmt::layer())
+                .with(fmt::layer().with_ansi(false).with_writer(nb))
+                .init();
+            info!("file log at {}\\nodus.log", dir.display());
+            return Some(guard);
+        }
+    }
+
+    // No %APPDATA% (non-Windows / dev) — stdout only.
+    tracing_subscriber::fmt().with_env_filter(make_filter()).init();
+    None
+}
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Epoch-millis of the last time the flyout hid itself on focus loss. Used to
@@ -89,11 +127,8 @@ fn build_tray() -> SystemTray {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Keep the file-log flush guard alive for the whole process.
+    let _log_guard = init_logging();
 
     info!("Nodus starting up");
 

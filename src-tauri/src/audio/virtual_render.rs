@@ -25,11 +25,17 @@
 /// pile up unread in the broadcast channel (which tolerates slow/absent
 /// receivers); no audio reaches the virtual mic, the app keeps running.
 ///
-/// No pacing of our own: frames already arrive at real-time rate from the
-/// capture side, so we write as they come. If our write counter runs more
-/// than a full ring ahead of the driver's read counter (nobody is recording
-/// from the mic), that is NOT an error — we keep writing and the driver
-/// resyncs to the live edge on its own when capture starts.
+/// Wall-clock pacing with a LEAD buffer (mirrors the ring_tone.rs reference):
+/// the driver's capture stream consumes this ring on its OWN wall clock, so the
+/// write cursor must stay a fixed lead AHEAD of real time or the consumer
+/// starves on the slightest capture/scheduler jitter and the driver pads the
+/// gap with silence — heard as a garbled, near-silent mic. Incoming frames
+/// arrive at real time with ZERO lead, so the writer holds the lead itself:
+/// real audio when available, a silence top-up when the mic is momentarily
+/// late. One-time ~100 ms of added mic latency, inaudible for voice.
+/// If our write counter runs more than a full ring ahead of the driver's read
+/// counter (nobody is recording from the mic), that is NOT an error — we keep
+/// writing and the driver resyncs to the live edge on its own when capture starts.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU32},
@@ -324,14 +330,30 @@ pub mod platform {
                     }
                 };
 
-                // Continue from the section's current counter — a previous
-                // producer (another route or ring_tone) may have advanced it.
-                let mut written: u64 = view.write_counter();
+                // ONE-TIME lead buffer (see module docs). The driver consumes this
+                // ring on its own wall clock; priming a backlog of silence once lets
+                // it read from buffered data, so WASAPI's ~10 ms packet jitter is
+                // absorbed instead of starving the consumer. Crucially we do NOT pad
+                // silence per-gap afterwards — that interleaves silence with speech
+                // and buzzes (periodic click-train); the one-time lead absorbs the
+                // jitter. Fixed format 48 kHz / stereo / 16-bit → 192 B/ms.
+                const LEAD_BYTES: u64 = 100 * 192; // ~100 ms jitter buffer
+
+                // Continue from the section's current counter — a previous producer
+                // (another route or ring_tone) may have advanced it — then prime the
+                // lead with silence right after it.
+                let base: u64 = view.write_counter();
+                {
+                    let silence = vec![0u8; LEAD_BYTES as usize];
+                    view.write_pcm(base, &silence);
+                }
+                let mut written: u64 = base + LEAD_BYTES;
+                view.publish(written);
                 let mut overrun_noted = false;
 
                 debug!(
-                    "VirtualRender: writing to {MIC_SECTION_NAME} from counter {written} \
-                     (source {} Hz, {} ch)",
+                    "VirtualRender: writing to {MIC_SECTION_NAME} from counter {base} \
+                     (+{LEAD_BYTES}-byte lead) (source {} Hz, {} ch)",
                     format.sample_rate, format.channels
                 );
 
@@ -345,12 +367,10 @@ pub mod platform {
                             apply_route_dsp(&mut frame, format.channels, is_muted, vol, pan_v);
                             let bytes = frame_to_ring_bytes(&frame, &format);
 
-                            // Lapping the driver's reader is expected whenever
-                            // no app records from the mic — the driver resyncs
-                            // to the live edge itself. Note it once, keep going.
+                            // Lapping the driver's reader is expected whenever no app
+                            // records from the mic — the driver resyncs itself.
                             if !overrun_noted
-                                && written.saturating_sub(view.read_counter())
-                                    > RING_BYTES as u64
+                                && written.saturating_sub(view.read_counter()) > RING_BYTES as u64
                             {
                                 debug!(
                                     "VirtualRender: writer is a full ring ahead of the \
