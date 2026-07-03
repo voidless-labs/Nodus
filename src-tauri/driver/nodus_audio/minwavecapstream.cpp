@@ -257,11 +257,14 @@ void CMiniportWaveCaptureStream::FillLoop()
             diagT0 = now.QuadPart;
         } else if (now.QuadPart - diagT0 >= 10000000LL) {   // 1 s in 100ns units
             LONG posCalls = InterlockedExchange(&m_PosCalls, 0);
+            LONG clampHits = InterlockedExchange(&m_ClampHits, 0);
+            LONG clampMax  = InterlockedExchange(&m_ClampMaxOver, 0);
             DbgPrint("Nodus capdiag: ticks=%lu zeroTicks=%lu take=%llu zero=%llu "
-                     "avail[%llu..%llu] resync=%lu buf=%lu posCalls=%ld\n",
+                     "avail[%llu..%llu] resync=%lu buf=%lu posCalls=%ld "
+                     "clampHits=%ld clampMax=%ld\n",
                      diagTicks, diagZeroTicks, diagTake, diagZero,
                      (diagAvailMin == ~0ULL ? 0ULL : diagAvailMin), diagAvailMax,
-                     diagResync, m_BufBytes, posCalls);
+                     diagResync, m_BufBytes, posCalls, clampHits, clampMax);
             diagT0 = now.QuadPart;
             diagTicks = diagZeroTicks = diagResync = 0;
             diagTake = diagZero = 0;
@@ -279,6 +282,11 @@ STDMETHODIMP_(void) CMiniportWaveCaptureStream::GetHWLatency(PKSRTAUDIO_HWLATENC
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetState(KSSTATE State)
 {
+    // t10 diag: catch audiodg restarting the stream mid-recording. Each RUN
+    // resets m_Start/m_FilledBytes → the position rewinds to 0 → the client loses
+    // phase. Repeated RUN lines during one recording = the compounding "к концу
+    // каша" mechanism.
+    DbgPrint("Nodus: capture SetState %d (was %d)\n", (int)State, (int)m_State);
     if (State == KSSTATE_RUN && (KSSTATE)m_State != KSSTATE_RUN) {
         KeQuerySystemTimePrecise(&m_Start);
         m_FilledBytes = 0;
@@ -312,7 +320,15 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPosition(PKSAUDIO_POSITIO
     // audiodg tolerates, like packet-based USB audio) instead of garbage samples.
     // Belt-and-suspenders with the 1 ms fill cadence. (t10, per Fable 5 review)
     ULONGLONG filled = m_FilledBytes;   // x64: aligned 64-bit read is atomic
-    if ((ULONGLONG)bytes > filled) bytes = (LONGLONG)filled;
+    if ((ULONGLONG)bytes > filled) {
+        // t10 diag: measure how often / how far the clamp saves us. clampHits≈0
+        // after the fine-cadence fix proves H is closed; large hits mean we are
+        // being saved by the clamp and event-driven WaveRT should be prioritised.
+        LONG over = (LONG)((ULONGLONG)bytes - filled);
+        InterlockedIncrement(&m_ClampHits);
+        if (over > m_ClampMaxOver) m_ClampMaxOver = over;   // racy max — diag only
+        bytes = (LONGLONG)filled;
+    }
     ULONG cap = (ULONG)((ULONGLONG)bytes % m_BufBytes);
     // Capture semantics: clients read BEHIND this position; the fill thread
     // writes the buffer forward against the same clock.
