@@ -8,6 +8,10 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::NonDelegatingQueryInterface(
         *ppv = PVOID(PUNKNOWN(PMINIPORTWAVERTSTREAM(this)));
     else if (IsEqualGUIDAligned(riid, IID_IMiniportWaveRTStream))
         *ppv = PVOID(PMINIPORTWAVERTSTREAM(this));
+    else if (IsEqualGUIDAligned(riid, IID_IMiniportWaveRTStreamNotification))
+        // Advertise event-driven WaveRT — audiodg then reads on our notification
+        // schedule instead of resampling a polled position. (t10)
+        *ppv = PVOID((PMINIPORTWAVERTSTREAMNOTIFICATION)this);
     else { *ppv = nullptr; return STATUS_INVALID_PARAMETER; }
     AddRef();
     return STATUS_SUCCESS;
@@ -71,24 +75,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateAudioBuffer(
     // Start the fill thread now that there is a buffer to fill. Unlike render,
     // the thread runs even without a ring: a microphone must keep producing
     // samples (silence) or capture clients stall on stale data.
-    if (!m_ThreadHandle) {
-        OBJECT_ATTRIBUTES oa;
-        InitializeObjectAttributes(&oa, nullptr, OBJ_KERNEL_HANDLE, nullptr, nullptr);
-        HANDLE thread = nullptr;
-        NTSTATUS ts = PsCreateSystemThread(&thread, THREAD_ALL_ACCESS, &oa,
-                                           nullptr, nullptr, FillThreadEntry, this);
-        DbgPrint("Nodus: capture PsCreateSystemThread status=0x%08X\n", ts);
-        if (NT_SUCCESS(ts)) {
-            m_ThreadHandle = thread;
-            ts = ObReferenceObjectByHandle(thread, THREAD_ALL_ACCESS, *PsThreadType,
-                                           KernelMode, (PVOID*)&m_ThreadObject, nullptr);
-            if (!NT_SUCCESS(ts)) {
-                // Can't join without the object — ask the thread to exit instead.
-                m_ThreadObject = nullptr;
-                KeSetEvent(&m_StopEvent, IO_NO_INCREMENT, FALSE);
-            }
-        }
-    }
+    StartFillThread();
 
     *OutMdl    = m_Mdl;
     *OutActual = RequestedSize;
@@ -97,9 +84,99 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateAudioBuffer(
     return STATUS_SUCCESS;
 }
 
+// Spawn the single PASSIVE_LEVEL fill thread (idempotent). Shared by the poll
+// (AllocateAudioBuffer) and event-driven (AllocateBufferWithNotification) paths.
+NTSTATUS CMiniportWaveCaptureStream::StartFillThread()
+{
+    if (m_ThreadHandle) return STATUS_SUCCESS;
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, nullptr, OBJ_KERNEL_HANDLE, nullptr, nullptr);
+    HANDLE thread = nullptr;
+    NTSTATUS ts = PsCreateSystemThread(&thread, THREAD_ALL_ACCESS, &oa,
+                                       nullptr, nullptr, FillThreadEntry, this);
+    DbgPrint("Nodus: capture PsCreateSystemThread status=0x%08X\n", ts);
+    if (NT_SUCCESS(ts)) {
+        m_ThreadHandle = thread;
+        ts = ObReferenceObjectByHandle(thread, THREAD_ALL_ACCESS, *PsThreadType,
+                                       KernelMode, (PVOID*)&m_ThreadObject, nullptr);
+        if (!NT_SUCCESS(ts)) {
+            // Can't join without the object — ask the thread to exit instead.
+            m_ThreadObject = nullptr;
+            KeSetEvent(&m_StopEvent, IO_NO_INCREMENT, FALSE);
+        }
+    }
+    return ts;
+}
+
+// ── Event-driven WaveRT (notification model) ────────────────────────────────
+// audiodg prefers this over polling when the stream exposes
+// IMiniportWaveRTStreamNotification. It allocates a buffer of NotificationCount
+// equal periods and registers an event; we signal that event once per period as
+// the fill thread produces data, so audiodg reads on our stable wall-clock
+// schedule instead of resampling a polled position (the nearest-neighbor "orc").
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateBufferWithNotification(
+    ULONG NotificationCount, ULONG RequestedSize, PMDL* AudioBufferMdl,
+    ULONG* ActualSize, ULONG* OffsetFromFirstPage, MEMORY_CACHING_TYPE* CacheType)
+{
+    if (m_Buffer) return STATUS_ALREADY_COMMITTED;
+    if (NotificationCount == 0) NotificationCount = 2;
+
+    // Size must split into NotificationCount whole-frame periods and be ≤ the
+    // requested size (WaveRT: actual must not exceed requested). Round down.
+    ULONG align = NODUS_BLOCK_ALIGN * NotificationCount;
+    ULONG size = RequestedSize - (RequestedSize % align);
+    if (size == 0) size = align;
+
+    m_Buffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, size, NODUS_POOL_TAG);
+    if (!m_Buffer) return STATUS_INSUFFICIENT_RESOURCES;
+    m_BufBytes = size;
+
+    m_Mdl = IoAllocateMdl(m_Buffer, size, FALSE, FALSE, nullptr);
+    if (!m_Mdl) {
+        ExFreePoolWithTag(m_Buffer, NODUS_POOL_TAG);
+        m_Buffer = nullptr; m_BufBytes = 0;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    MmBuildMdlForNonPagedPool(m_Mdl);
+
+    m_NotifyPeriodBytes = size / NotificationCount;
+    m_LastNotifyPeriod = 0;
+    DbgPrint("Nodus: capture AllocBufWithNotif count=%lu req=%lu size=%lu period=%lu\n",
+             NotificationCount, RequestedSize, size, m_NotifyPeriodBytes);
+
+    StartFillThread();
+
+    *AudioBufferMdl     = m_Mdl;
+    *ActualSize         = size;
+    *OffsetFromFirstPage = 0;
+    *CacheType          = MmCached;
+    return STATUS_SUCCESS;
+}
+
+STDMETHODIMP_(void) CMiniportWaveCaptureStream::FreeBufferWithNotification(
+    PMDL AudioBufferMdl, ULONG BufferSize)
+{
+    m_NotifyPeriodBytes = 0;
+    m_LastNotifyPeriod = 0;
+    FreeAudioBuffer(AudioBufferMdl, BufferSize);   // joins the thread, frees buffer
+}
+
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::RegisterNotificationEvent(PKEVENT NotificationEvent)
+{
+    m_NotifyEvent = NotificationEvent;   // one event per WaveRT stream
+    return STATUS_SUCCESS;
+}
+
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::UnregisterNotificationEvent(PKEVENT NotificationEvent)
+{
+    if (m_NotifyEvent == NotificationEvent) m_NotifyEvent = nullptr;
+    return STATUS_SUCCESS;
+}
+
 STDMETHODIMP_(void) CMiniportWaveCaptureStream::FreeAudioBuffer(PMDL, ULONG)
 {
-    StopFillThread();   // the thread writes m_Buffer — join BEFORE freeing it
+    StopFillThread();   // the thread writes m_Buffer / reads m_NotifyEvent — join FIRST
+    m_NotifyEvent = nullptr;
     if (m_Mdl)    { IoFreeMdl(m_Mdl); m_Mdl = nullptr; }
     if (m_Buffer) { ExFreePoolWithTag(m_Buffer, NODUS_POOL_TAG); m_Buffer = nullptr; }
     m_BufBytes = 0;
@@ -246,6 +323,18 @@ void CMiniportWaveCaptureStream::FillLoop()
 
         m_FilledBytes = target;
 
+        // Event-driven WaveRT: signal audiodg once per notification period filled,
+        // so it reads on our stable wall-clock schedule instead of resampling a
+        // polled position (the nearest-neighbor ±1 "orc"). Signal at most once per
+        // tick — audiodg reads all newly-available data via GetPosition. (t10)
+        if (m_NotifyEvent && m_NotifyPeriodBytes) {
+            ULONGLONG periodNow = m_FilledBytes / m_NotifyPeriodBytes;
+            if (periodNow != m_LastNotifyPeriod) {
+                m_LastNotifyPeriod = periodNow;
+                KeSetEvent(m_NotifyEvent, IO_NO_INCREMENT, FALSE);
+            }
+        }
+
         // ── t10 diagnostics: accumulate, emit once per ~1 s ──────────────────
         diagTicks++;
         diagTake += take;
@@ -290,6 +379,7 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetState(KSSTATE State)
     if (State == KSSTATE_RUN && (KSSTATE)m_State != KSSTATE_RUN) {
         KeQuerySystemTimePrecise(&m_Start);
         m_FilledBytes = 0;
+        m_LastNotifyPeriod = 0;   // fresh notification cadence for the new RUN
         if (m_Miniport) m_Miniport->ClaimReader(this);
         // Publish m_Start/m_FilledBytes before the fill thread can see RUN.
         // (A PAUSE→RUN racing a mid-iteration fill can at worst rewrite one
