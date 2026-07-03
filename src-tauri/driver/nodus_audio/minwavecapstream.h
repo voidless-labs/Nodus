@@ -28,13 +28,11 @@ public:
 
     NTSTATUS Init(CMiniportWaveCapture* Miniport);
 
-    // Cumulative macro — declares the 8 IMiniportWaveRTStream methods
-    // (SetFormat/AllocateAudioBuffer/FreeAudioBuffer/GetPosition/SetState/
-    // GetHWLatency/GetPositionRegister/GetClockRegister) AND the 4 notification
-    // ones (AllocateBufferWithNotification/FreeBufferWithNotification/
-    // Register/UnregisterNotificationEvent). Do NOT also use IMP_IMiniportWaveRTStream
-    // — it would re-declare the base 8 (this is how SYSVAD declares it).
-    IMP_IMiniportWaveRTStreamNotification;
+    // This WDK's IMP_IMiniportWaveRTStreamNotification declares ONLY the 4
+    // notification methods — the base 8 come from IMP_IMiniportWaveRTStream, so we
+    // need BOTH (without the base macro the class stays abstract → C2259).
+    IMP_IMiniportWaveRTStream;              // SetFormat/AllocateAudioBuffer/… (8)
+    IMP_IMiniportWaveRTStreamNotification;  // AllocateBufferWithNotification/… (4)
 
 private:
     static VOID FillThreadEntry(PVOID Context);
