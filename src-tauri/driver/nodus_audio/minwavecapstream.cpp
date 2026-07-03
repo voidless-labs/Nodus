@@ -2,6 +2,12 @@
 #include "minwavecap.h"
 #include <ksmedia.h>
 
+// ⚠ TEMP DIAGNOSTIC (t10 ramp test) — REVERT this whole commit after the test.
+// When defined, FillLoop writes a per-16-bit-sample sawtooth into the cyclic
+// buffer instead of mic audio, so ramp-check can prove whether audiodg delivers
+// our samples bit-exact or resamples them (the suspected "orc" source).
+#define NODUS_RAMP_TEST 1
+
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::NonDelegatingQueryInterface(REFIID riid, PVOID* ppv)
 {
     if (IsEqualGUIDAligned(riid, IID_IUnknown))
@@ -192,9 +198,32 @@ void CMiniportWaveCaptureStream::FillLoop()
         }
         ULONGLONG delta = target - filled;
 
-        // Pull whatever Nodus has produced (single consumer of the mic ring).
         ULONGLONG take = 0;
         ULONGLONG diagAvail = 0;
+#ifdef NODUS_RAMP_TEST
+        // Write a per-16-bit-sample sawtooth = absolute sample index. audiodg
+        // records it; ramp-check verifies: clean +1 integer ramp ⇒ bit-exact
+        // path; fractional/smoothed steps ⇒ audiodg resampled; backward jump of
+        // m_BufBytes/2 samples ⇒ stale-lap read.
+        {
+            ULONGLONG dst = filled;
+            ULONGLONG remaining = delta;
+            while (remaining) {
+                ULONG dstOff = (ULONG)(dst % m_BufBytes);
+                ULONG span = (remaining > MAXULONG) ? MAXULONG : (ULONG)remaining;
+                if (span > m_BufBytes - dstOff) span = m_BufBytes - dstOff;
+                PUSHORT p = (PUSHORT)((PUCHAR)m_Buffer + dstOff);
+                ULONG n = span / 2;
+                USHORT base = (USHORT)((dst / 2) & 0xFFFF);
+                for (ULONG i = 0; i < n; i++) p[i] = (USHORT)(base + i);
+                dst += span;
+                remaining -= span;
+            }
+            take = delta;
+        }
+        (void)ring;
+#else
+        // Pull whatever Nodus has produced (single consumer of the mic ring).
         if (ring && m_Miniport && m_Miniport->ClaimReader(this)) {
             ULONGLONG w = ring->WriteBytes;   // advanced by Nodus userspace
             KeMemoryBarrier();                // read the counter before the data
@@ -243,6 +272,7 @@ void CMiniportWaveCaptureStream::FillLoop()
             zdst       += span;
             zremaining -= span;
         }
+#endif // NODUS_RAMP_TEST
 
         m_FilledBytes = target;
 
