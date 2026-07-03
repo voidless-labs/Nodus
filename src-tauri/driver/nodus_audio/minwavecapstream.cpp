@@ -133,6 +133,15 @@ void CMiniportWaveCaptureStream::FillLoop()
 {
     NODUS_RING_BUFFER* ring = m_Ring;
 
+    // Raise the system timer resolution to 1 ms for the life of this stream.
+    // Otherwise this thread's relative wait fires at the default ~15.6 ms
+    // granularity — nearly as long as the fill LEAD (~17 ms in an 8 KB buffer),
+    // leaving almost no margin: any wake jitter lets the reported position outrun
+    // m_FilledBytes and audiodg reads the PREVIOUS buffer lap (~42 ms-old audio),
+    // heard as repeated/stretched, torn speech. At 1 ms we can wake every ~3 ms
+    // and keep a large, jitter-proof margin under the lead. Released below.
+    ExSetTimerResolution(10000, TRUE);   // 10000 * 100ns = 1 ms
+
     // t10 diagnostics — a ~1 s summary in DebugView of what this loop actually
     // does to the (known-clean) ring data: is it underrunning (zero-fill), how
     // deep is the ring backlog (avail), and how often does it resync? This tells
@@ -143,7 +152,7 @@ void CMiniportWaveCaptureStream::FillLoop()
 
     for (;;) {
         LARGE_INTEGER timeout;
-        timeout.QuadPart = -10 * 10000;   // 10 ms, relative
+        timeout.QuadPart = -3 * 10000;   // 3 ms, relative (fine cadence @ 1ms res)
         NTSTATUS wait = KeWaitForSingleObject(&m_StopEvent, Executive, KernelMode, FALSE, &timeout);
         if (wait != STATUS_TIMEOUT) break;   // stop signaled (or wait error) — exit
 
@@ -259,6 +268,8 @@ void CMiniportWaveCaptureStream::FillLoop()
             diagAvailMin = ~0ULL; diagAvailMax = 0;
         }
     }
+
+    ExSetTimerResolution(0, FALSE);   // release the 1 ms request taken above
 }
 
 STDMETHODIMP_(void) CMiniportWaveCaptureStream::GetHWLatency(PKSRTAUDIO_HWLATENCY hw)
