@@ -233,7 +233,10 @@ void CMiniportWaveCaptureStream::FillLoop()
 
     for (;;) {
         LARGE_INTEGER timeout;
-        timeout.QuadPart = -3 * 10000;   // 3 ms, relative (fine cadence @ 1ms res)
+        timeout.QuadPart = -1 * 10000;   // 1 ms — refresh the position register as
+                                         // smoothly as software allows (~48-frame
+                                         // steps) so audiodg's RT-pump has less
+                                         // stepwise position noise to servo against
         NTSTATUS wait = KeWaitForSingleObject(&m_StopEvent, Executive, KernelMode, FALSE, &timeout);
         if (wait != STATUS_TIMEOUT) break;   // stop signaled (or wait error) — exit
 
@@ -461,8 +464,8 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::GetPositionRegister(PKSRTAUD
     Reg->Width       = 32;
     Reg->Numerator   = 1;   // register value is already the byte offset
     Reg->Denominator = 1;
-    // Honest granularity: the fill thread refreshes the register every ~3 ms.
-    Reg->Accuracy    = (NODUS_AVG_BYTES * 3) / 1000; // ~576 bytes
+    // Honest granularity: the fill thread refreshes the register every ~1 ms.
+    Reg->Accuracy    = (NODUS_AVG_BYTES * 1) / 1000; // ~192 bytes
     Reg->Accuracy   -= Reg->Accuracy % NODUS_BLOCK_ALIGN;
     DbgPrint("Nodus: capture GetPositionRegister -> %p acc=%lu\n", m_PosReg, Reg->Accuracy);
     return STATUS_SUCCESS;
