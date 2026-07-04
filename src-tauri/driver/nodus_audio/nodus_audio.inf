@@ -109,3 +109,6 @@ KSNAME_Wave         = "Wave"
 KSNAME_Topology     = "Topology"
 KSNAME_WaveCap      = "WaveCap"
 KSNAME_TopologyCap  = "TopologyCap"
+
+; PKEY_AudioEngine_DeviceFormat — endpoint Default Format (.I.Wave/.I.WaveCap EP\0 seed).
+PKEY_AudioEngine_DeviceFormat = "{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0"
