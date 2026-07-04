@@ -39,9 +39,23 @@ CMiniportWaveCaptureStream::~CMiniportWaveCaptureStream()
     }
 }
 
-STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetFormat(PKSDATAFORMAT)
+STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::SetFormat(PKSDATAFORMAT Format)
 {
-    return STATUS_SUCCESS; // single fixed format advertised in the data range
+    // Accept ONLY 48000/2/16. DataRangeIntersection already forces this, but the
+    // stream previously accepted anything unconditionally — a mono open then made
+    // audiodg read our stereo ring as mono (2:1 decimation = "orc"). Reject any
+    // mismatch defensively so that path can never open. (t10)
+    if (!Format || Format->FormatSize < sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEX))
+        return STATUS_INVALID_PARAMETER;
+    PWAVEFORMATEX wfx = (PWAVEFORMATEX)(Format + 1);
+    if (wfx->nChannels != NODUS_CHANNELS ||
+        wfx->nSamplesPerSec != NODUS_RATE ||
+        wfx->wBitsPerSample != NODUS_BITS) {
+        DbgPrint("Nodus: capture SetFormat REJECT %u/%u/%u\n",
+                 wfx->nSamplesPerSec, wfx->nChannels, wfx->wBitsPerSample);
+        return STATUS_NOT_SUPPORTED;
+    }
+    return STATUS_SUCCESS;
 }
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCaptureStream::AllocateAudioBuffer(

@@ -127,9 +127,54 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::GetDescription(PPCFILTER_DESCRIPTO
 }
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::DataRangeIntersection(
-    ULONG, PKSDATARANGE, PKSDATARANGE, ULONG, PVOID, PULONG)
+    ULONG PinId, PKSDATARANGE DataRange, PKSDATARANGE MatchingDataRange,
+    ULONG OutputBufferLength, PVOID ResultantFormat, PULONG ResultantFormatLength)
 {
-    return STATUS_NOT_IMPLEMENTED; // PortCls computes the intersection from our data range
+    UNREFERENCED_PARAMETER(MatchingDataRange);
+
+    // Force the single fixed format 48000/2/16 for EVERY intersection. KSDATARANGE_AUDIO
+    // has no MinimumChannels, so PortCls's default intersection also offers MONO (1 ch).
+    // A mono endpoint made audiodg read our stereo ring as mono → 2:1 dithering
+    // decimation = the "orc". Refusing everything but stereo removes mono from mmsys and
+    // makes the mono path impossible. (t10 — the real root cause of the "regression")
+    if (PinId != WAVECAP_PIN_HOST) return STATUS_NO_MATCH;
+
+    if ((!IsEqualGUIDAligned(DataRange->MajorFormat, KSDATAFORMAT_TYPE_AUDIO) &&
+         !IsEqualGUIDAligned(DataRange->MajorFormat, KSDATAFORMAT_TYPE_WILDCARD)) ||
+        (!IsEqualGUIDAligned(DataRange->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) &&
+         !IsEqualGUIDAligned(DataRange->SubFormat, KSDATAFORMAT_SUBTYPE_WILDCARD)) ||
+        (!IsEqualGUIDAligned(DataRange->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX) &&
+         !IsEqualGUIDAligned(DataRange->Specifier, KSDATAFORMAT_SPECIFIER_WILDCARD)))
+        return STATUS_NO_MATCH;
+
+    // The client's audio range must actually contain 48000/2/16.
+    if (DataRange->FormatSize >= sizeof(KSDATARANGE_AUDIO)) {
+        PKSDATARANGE_AUDIO a = (PKSDATARANGE_AUDIO)DataRange;
+        if (a->MaximumChannels < NODUS_CHANNELS ||
+            a->MinimumBitsPerSample > NODUS_BITS || a->MaximumBitsPerSample < NODUS_BITS ||
+            a->MinimumSampleFrequency > NODUS_RATE || a->MaximumSampleFrequency < NODUS_RATE)
+            return STATUS_NO_MATCH;
+    }
+
+    ULONG required = sizeof(KSDATAFORMAT_WAVEFORMATEX);
+    if (OutputBufferLength == 0) { *ResultantFormatLength = required; return STATUS_BUFFER_OVERFLOW; }
+    if (OutputBufferLength < required) return STATUS_BUFFER_TOO_SMALL;
+
+    PKSDATAFORMAT_WAVEFORMATEX out = (PKSDATAFORMAT_WAVEFORMATEX)ResultantFormat;
+    RtlZeroMemory(out, required);
+    out->DataFormat.FormatSize        = required;
+    out->DataFormat.MajorFormat       = KSDATAFORMAT_TYPE_AUDIO;
+    out->DataFormat.SubFormat         = KSDATAFORMAT_SUBTYPE_PCM;
+    out->DataFormat.Specifier         = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
+    out->WaveFormatEx.wFormatTag      = WAVE_FORMAT_PCM;
+    out->WaveFormatEx.nChannels       = NODUS_CHANNELS;
+    out->WaveFormatEx.nSamplesPerSec  = NODUS_RATE;
+    out->WaveFormatEx.wBitsPerSample  = NODUS_BITS;
+    out->WaveFormatEx.nBlockAlign     = NODUS_BLOCK_ALIGN;
+    out->WaveFormatEx.nAvgBytesPerSec = NODUS_AVG_BYTES;
+    out->WaveFormatEx.cbSize          = 0;
+    *ResultantFormatLength = required;
+    return STATUS_SUCCESS;
 }
 
 STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::GetDeviceDescription(PDEVICE_DESCRIPTION pDevDesc)
@@ -149,7 +194,15 @@ STDMETHODIMP_(NTSTATUS) CMiniportWaveCapture::NewStream(
 {
     UNREFERENCED_PARAMETER(Pin);
     UNREFERENCED_PARAMETER(Capture);
-    UNREFERENCED_PARAMETER(DataFormat);
+
+    // Permanent diagnostic: the actual format audiodg opens us with. A mono
+    // (48000/1/16) open is the "orc" (stereo ring read as mono → 2:1 decimation);
+    // this line makes that instantly visible. (t10)
+    if (DataFormat && DataFormat->FormatSize >= sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEX)) {
+        PWAVEFORMATEX w = (PWAVEFORMATEX)(DataFormat + 1);
+        DbgPrint("Nodus: capture NewStream fmt %u/%u/%u\n",
+                 w->nSamplesPerSec, w->nChannels, w->wBitsPerSample);
+    }
 
     // audiodg opens streams long after boot — by now \BaseNamedObjects exists,
     // so this is where the ring reliably comes to life (retries if Init failed).
