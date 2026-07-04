@@ -41,6 +41,11 @@ AddReg = NodusAudio.I.Wave.AddReg
 [NodusAudio.I.Wave.AddReg]
 HKR,,FriendlyName,,%Wave.Desc%
 HKR,,CLSID,,%Proxy.CLSID%
+; Seed the endpoint Default Format = 48000/2/16 (WAVEFORMATEXTENSIBLE). Windows'
+; default for an endpoint whose pin also allowed mono could be 48000/1/16, which
+; made audiodg read our stereo ring as mono → 2:1 decimation ("orc"). Pinning
+; stereo here stops that out of the box for the static endpoint. (t10)
+HKR,EP\0,%PKEY_AudioEngine_DeviceFormat%,0x00000001,FE,FF,02,00,80,BB,00,00,00,EE,02,00,04,00,10,00,16,00,10,00,03,00,00,00,01,00,00,00,00,00,10,00,80,00,00,AA,00,38,9B,71
 
 [NodusAudio.I.Topo]
 AddReg = NodusAudio.I.Topo.AddReg
