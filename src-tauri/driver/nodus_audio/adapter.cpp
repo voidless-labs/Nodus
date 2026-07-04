@@ -157,6 +157,84 @@ static VOID NodusUnregisterConnection(PDEVICE_OBJECT Fdo, PPORT FromPort, ULONG 
     }
 }
 
+// ── t10 §2b: seed a dynamic endpoint's Default Format = 48000/2/16 ────────────
+// A dynamic subdevice registers its device interface at runtime under a
+// reference name the INF can't target, so the endpoint's persisted
+// PKEY_AudioEngine_DeviceFormat can linger at 48000/1/16 (mono) from a prior
+// incarnation on the same id — audiodg then reads our stereo ring as mono
+// (2:1 decimation = "orc"). Mirror the static INF EP\0 seed from the kernel so
+// a freshly (re)created device is stereo out of the box regardless of history.
+//
+// Value = WAVEFORMATEXTENSIBLE, 48000 Hz / 2ch / 16-bit PCM — byte-identical to
+// nodus_audio.inf's HKR,EP\0 seed.
+static const UCHAR g_NodusStereoFormat[] = {
+    0xFE,0xFF, 0x02,0x00, 0x80,0xBB,0x00,0x00, 0x00,0xEE,0x02,0x00,
+    0x04,0x00, 0x10,0x00, 0x16,0x00, 0x10,0x00, 0x03,0x00,0x00,0x00,
+    0x01,0x00,0x00,0x00, 0x00,0x00,0x10,0x00, 0x80,0x00,0x00,0xAA, 0x00,0x38,0x9B,0x71
+};
+
+static VOID NodusSeedDynamicFormat(_In_ PCWSTR RefName, _In_ BOOLEAN Capture)
+{
+    PAGED_CODE();
+
+    const GUID* category = Capture ? &KSCATEGORY_CAPTURE : &KSCATEGORY_RENDER;
+    PWSTR list = nullptr;
+    NTSTATUS status = IoGetDeviceInterfaces(category, g_NodusAdapter.Pdo,
+                                            DEVICE_INTERFACE_INCLUDE_NONACTIVE, &list);
+    if (!NT_SUCCESS(status) || list == nullptr) {
+        DbgPrint("Nodus: seed %ws: IoGetDeviceInterfaces 0x%08X\n", RefName, status);
+        return;
+    }
+
+    const size_t refLen = wcslen(RefName);
+    for (PWSTR link = list; *link; link += wcslen(link) + 1) {
+        // Device-interface symlinks end with "\<reference-string>"; match ours.
+        const size_t linkLen = wcslen(link);
+        if (linkLen < refLen + 1) continue;
+        PWSTR tail = link + (linkLen - refLen);
+        if (tail[-1] != L'\\' || _wcsicmp(tail, RefName) != 0) continue;
+
+        UNICODE_STRING symlink;
+        RtlInitUnicodeString(&symlink, link);
+        HANDLE hIf = nullptr;
+        status = IoOpenDeviceInterfaceRegistryKey(&symlink, KEY_ALL_ACCESS, &hIf);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("Nodus: seed %ws: OpenIfKey 0x%08X\n", RefName, status);
+            break;
+        }
+
+        // Build the EP\0 subkey chain under the interface's storage key
+        // (same location the INF's HKR,EP\0 AddReg targets).
+        HANDLE hEp = nullptr, hEp0 = nullptr;
+        UNICODE_STRING sub;
+        OBJECT_ATTRIBUTES oa;
+
+        RtlInitUnicodeString(&sub, L"EP");
+        InitializeObjectAttributes(&oa, &sub, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, hIf, nullptr);
+        status = ZwCreateKey(&hEp, KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &oa, 0, nullptr,
+                             REG_OPTION_NON_VOLATILE, nullptr);
+        if (NT_SUCCESS(status)) {
+            RtlInitUnicodeString(&sub, L"0");
+            InitializeObjectAttributes(&oa, &sub, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, hEp, nullptr);
+            status = ZwCreateKey(&hEp0, KEY_SET_VALUE, &oa, 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, nullptr);
+            if (NT_SUCCESS(status)) {
+                UNICODE_STRING valName;
+                RtlInitUnicodeString(&valName, L"{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0");
+                status = ZwSetValueKey(hEp0, &valName, 0, REG_BINARY,
+                                       (PVOID)g_NodusStereoFormat, sizeof(g_NodusStereoFormat));
+                ZwClose(hEp0);
+            }
+            ZwClose(hEp);
+        }
+        ZwClose(hIf);
+        DbgPrint("Nodus: seed %ws format 48000/2/16 (0x%08X)\n", RefName, status);
+        break;
+    }
+
+    ExFreePool(list);
+}
+
 NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
 {
     PAGED_CODE();
@@ -225,6 +303,13 @@ NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
     slot->Wave  = wavePort;
     slot->Topo  = topoPort;
     RtlStringCchCopyW(slot->Name, RTL_NUMBER_OF(slot->Name), FriendlyName);
+
+    // Seed the endpoint Default Format = stereo so audiodg never reads the
+    // stereo ring as mono ("orc") — overrides any mono default persisted for
+    // this id from a prior incarnation. Best-effort: a miss only leaves the
+    // legacy default, it never fails the install. (t10 §2b)
+    NodusSeedDynamicFormat(slot->WaveName, capture);
+
     DbgPrint("Nodus: dynamic device id=%u kind=%u installed (%ws)\n", Id, Kind, slot->WaveName);
     return STATUS_SUCCESS;
 }
