@@ -7,7 +7,7 @@ Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %Provider%
-DriverVer   = 06/03/2026,1.0.0.2
+DriverVer   = 06/27/2026,1.0.0.3
 CatalogFile = nodus_audio.cat
 PnpLockdown = 1
 
@@ -86,7 +86,14 @@ nodus_audio.sys = 1
 ; ============================================================
 [Strings]
 Provider     = "Nodus"
-DeviceDesc   = "Nodus Virtual Audio"
+; Endpoint names are built by Windows as "form-factor (DeviceDesc)" (field-tested
+; 13.06: DeviceDesc wins over pin FriendlyName). One devnode → one DeviceDesc, so
+; render + capture share the suffix: "Динамики (Nodus)" / "Микрофон (Nodus)" — short
+; and distinguished by the form factor. A distinct "(Nodus Mic)" suffix needs a
+; per-endpoint FriendlyName written from the driver (ADR §6.2) or two devnodes — do
+; that during the t5 step-2b kernel iteration. Engine/UI detect by substring "nodus"
+; → still matches. (t8)
+DeviceDesc   = "Nodus"
 ServiceDesc  = "Nodus Virtual Audio Service"
 Wave.Desc    = "Nodus Virtual Speaker"
 Topo.Desc    = "Nodus Virtual Speaker Topology"
