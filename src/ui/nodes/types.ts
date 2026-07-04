@@ -39,6 +39,9 @@ export interface NodeModel {
   kind: NodeKind;
   /** Whether a virtual node is the mic-sink (audio flows INTO it). */
   micSink?: boolean;
+  /** Whether a virtual node is our virtual OUTPUT/speaker used as a SOURCE — apps
+   *  play into it and Nodus reads the render ring (audio flows OUT of it). (t8) */
+  virtualSource?: boolean;
   name: string;
   /** Secondary line: system device name or status. */
   subtitle: string;

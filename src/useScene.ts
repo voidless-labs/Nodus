@@ -62,13 +62,18 @@ function deviceNode(d: AudioDevice, scene: Scene, pos?: Pos): NodeModel {
   // A third-party virtual mic is a read-only capture endpoint: you can't render
   // into it, so it must stay a source.
   const micSink = isVirtual && isInput && isOwn;
-  const hasOutput = isInput && !micSink;
+  // OUR virtual OUTPUT/speaker is a render endpoint: apps play into it and Nodus
+  // reads its render ring → use it as a SOURCE (mirror of micSink). Own-only, so
+  // third-party render endpoints (VB-Cable Input) stay sinks you route into. (t8)
+  const virtualSource = isVirtual && !isInput && isOwn;
+  const hasOutput = (isInput && !micSink) || virtualSource;
   const kind: NodeModel['kind'] = isVirtual ? 'virtual' : isInput ? 'source' : 'output';
   const side = hasOutput ? 'left' : 'right';
   return {
     id: nid('n'),
     kind,
     micSink: micSink || undefined,
+    virtualSource: virtualSource || undefined,
     name: d.name.replace(/\s*\([^)]*\)\s*$/, '').trim() || d.name,
     // Real device name like AddPanel: original_name, else the "(…)" suffix, else type.
     subtitle: d.original_name ?? d.name.match(/\(([^)]*)\)\s*$/)?.[1] ?? d.device_type,

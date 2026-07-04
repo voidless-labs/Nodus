@@ -62,7 +62,14 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
       // treated as a normal WASAPI render into a capture endpoint (no audio). Send
       // the canonical marker label for our mic sinks so detection is robust; the
       // visible node name (n.name) is unaffected. (mic regression fix)
-      label: n.micSink ? 'Nodus Virtual Mic' : n.name,
+      // virtualSource (our virtual OUTPUT used as a source) gets a canonical Nodus
+      // marker too so is_nodus_virtual_name detects it after a rename → the engine
+      // reads its render ring (VirtualCapture) by the device_id `nodus:<N>`. (t8)
+      label: n.micSink
+        ? 'Nodus Virtual Mic'
+        : n.virtualSource
+          ? 'Nodus Virtual Speaker'
+          : n.name,
       device_id: n.deviceId ?? '',
       exe_name: n.exeName ?? null,
     });

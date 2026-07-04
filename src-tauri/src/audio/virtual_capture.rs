@@ -27,7 +27,7 @@ pub mod platform {
     use super::*;
     // Shared contract mirror (header layout + constants) — see ring_layout.rs.
     use crate::audio::ring_layout::{
-        RingHeader, RENDER_SECTION_NAME as SECTION_NAME, RING_BYTES, RING_MAGIC, RING_VERSION,
+        render_section_name, RingHeader, RING_BYTES, RING_MAGIC, RING_VERSION,
     };
     use windows::{
         core::PCWSTR,
@@ -46,15 +46,16 @@ pub mod platform {
     unsafe impl Sync for RingView {}
 
     impl RingView {
-        fn open() -> Result<Self, SessionError> {
-            let name: Vec<u16> = format!("{SECTION_NAME}\0").encode_utf16().collect();
+        fn open(ring_id: u32) -> Result<Self, SessionError> {
+            let section = render_section_name(ring_id);
+            let name: Vec<u16> = format!("{section}\0").encode_utf16().collect();
 
             unsafe {
                 let handle =
                     OpenFileMappingW(FILE_MAP_READ.0, false, PCWSTR(name.as_ptr()))
                         .map_err(|e| {
                             SessionError::DeviceUnavailable(format!(
-                                "{SECTION_NAME} section not found — is nodus_audio.sys loaded? {e}"
+                                "{section} section not found — is nodus_audio.sys loaded? {e}"
                             ))
                         })?;
 
@@ -148,13 +149,17 @@ pub mod platform {
     // ── Public capture handle ────────────────────────────────────────────────
 
     pub struct VirtualCapture {
+        /// Kernel render ring to read — 0 = static virtual speaker, 1..8 = a
+        /// dynamically-created virtual output (its driver device id). (t8)
+        ring_id: u32,
         stop_flag: Arc<AtomicBool>,
         sender: Option<broadcast::Sender<AudioFrame>>,
     }
 
     impl VirtualCapture {
-        pub fn new() -> Self {
+        pub fn new(ring_id: u32) -> Self {
             Self {
+                ring_id,
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 sender: None,
             }
@@ -171,7 +176,8 @@ pub mod platform {
             }
 
             // Verify driver is present before spawning thread
-            let view = RingView::open()?;
+            let ring_id = self.ring_id;
+            let view = RingView::open(ring_id)?;
 
             let (tx, rx) = broadcast::channel(CHANNEL_CAPACITY);
             self.sender = Some(tx.clone());
@@ -190,7 +196,7 @@ pub mod platform {
 
                 let mut local_read: u64 = view.write_counter();
 
-                debug!("VirtualCapture: reading from {SECTION_NAME} ring");
+                debug!("VirtualCapture: reading from {} ring", render_section_name(ring_id));
 
                 while !stop.load(Ordering::SeqCst) {
                     let avail = view.available(local_read);
@@ -230,7 +236,7 @@ pub mod platform {
 
     pub struct VirtualCapture;
     impl VirtualCapture {
-        pub fn new() -> Self { Self }
+        pub fn new(_ring_id: u32) -> Self { Self }
         pub fn subscribe(&self) -> Option<broadcast::Receiver<AudioFrame>> { None }
         pub fn start(&mut self) -> Result<broadcast::Receiver<AudioFrame>, SessionError> {
             Err(SessionError::DeviceUnavailable("VirtualCapture not supported on non-Windows".into()))

@@ -107,15 +107,19 @@ export default function NodusApp() {
     return m ? Number(m[1]) : null;
   };
 
-  const createVirtualDevice = useCallback(() => {
-    const n = managed.filter((m) => !m.is_static).length + 1;
-    void bridgeCreateVirtualDevice('capture', `Nodus Mic ${n}`)
-      .then((info) => {
-        refreshManaged();
-        if (info) setPendingVirtualEdit(`nodus:${info.id}`); // open its name field
-      })
-      .catch((e) => console.error('create_virtual_device:', e));
-  }, [managed, refreshManaged]);
+  const createVirtualDevice = useCallback(
+    (kind: 'render' | 'capture') => {
+      const n = managed.filter((m) => !m.is_static && m.kind === kind).length + 1;
+      const name = kind === 'capture' ? `Nodus Mic ${n}` : `Nodus Output ${n}`;
+      void bridgeCreateVirtualDevice(kind, name)
+        .then((info) => {
+          refreshManaged();
+          if (info) setPendingVirtualEdit(`nodus:${info.id}`); // open its name field
+        })
+        .catch((e) => console.error('create_virtual_device:', e));
+    },
+    [managed, refreshManaged],
+  );
 
   // No SET_NAME IOCTL yet (ADR §6.2): rename = destroy + recreate with the new name.
   const renameVirtual = useCallback(

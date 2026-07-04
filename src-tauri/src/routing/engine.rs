@@ -423,7 +423,14 @@ impl RoutingEngine {
                     CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(pid, self.format)),
                     self.format,
                 ),
-                Backend::Virtual => (CaptureSource::Virtual(VirtualCapture::new()), self.format),
+                Backend::Virtual => {
+                    // Read the driver render ring for this source's device: `nodus:<N>`
+                    // → dynamic virtual output N, else the static speaker (ring 0). (t8)
+                    let ring_id = crate::audio::virtual_device::ring_id_from_device_id(
+                        &ar.from_device_id,
+                    );
+                    (CaptureSource::Virtual(VirtualCapture::new(ring_id)), self.format)
+                }
                 Backend::Device => {
                     let f = get_device_capture_format(&ar.from_device_id).unwrap_or(self.format);
                     (

@@ -25,8 +25,19 @@ pub(crate) const RING_MAGIC: u32 = 0x4E4F_4455; // 'NODU'
 pub(crate) const RING_VERSION: u32 = 2;
 pub(crate) const RING_BYTES: usize = 384_000; // 2 s of 48 kHz stereo 16-bit
 
-/// Render ring section (virtual speaker → Nodus).
+/// Render ring section for the STATIC virtual speaker (ring id 0).
+/// Prefer `render_section_name(id)`; kept as the documented static name / test anchor.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const RENDER_SECTION_NAME: &str = "Global\\NodusRing-0";
+
+/// Render ring section for a given ring id — `Global\NodusRing-<id>`, matching the
+/// driver's `NODUS_RING_NAME_KERNEL`. id 0 = static, 1..8 = dynamically-created
+/// virtual outputs (driver device id IS the ring id). Nodus CONSUMES this ring
+/// (apps play into the virtual speaker, the engine captures it as a source). (t8)
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn render_section_name(ring_id: u32) -> String {
+    format!("Global\\NodusRing-{ring_id}")
+}
 /// Mic ring section for the STATIC virtual microphone (ring id 0). World-writable:
 /// created by the driver with an everyone-write DACL so the non-admin app can produce.
 /// Prefer `mic_section_name(id)`; kept as the documented static name / test anchor.
@@ -94,5 +105,7 @@ mod tests {
         // Static ring 0 must equal the const; dynamic ids map to their own section.
         assert_eq!(mic_section_name(0), MIC_SECTION_NAME);
         assert_eq!(mic_section_name(3), "Global\\NodusRing-mic-3");
+        assert_eq!(render_section_name(0), RENDER_SECTION_NAME);
+        assert_eq!(render_section_name(2), "Global\\NodusRing-2");
     }
 }

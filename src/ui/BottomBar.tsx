@@ -63,7 +63,7 @@ export function BottomBar({
   createdIds?: Set<string>;
   /** A just-created device id — its name field opens for editing. */
   editingId?: string | null;
-  onCreateVirtual?: () => void;
+  onCreateVirtual?: (kind: 'render' | 'capture') => void;
   onRenameVirtual?: (id: string, name: string) => void;
   onDeleteVirtual?: (id: string) => void;
   /** Begin a pointer-based drag of a catalog node / device onto the canvas. */
@@ -188,10 +188,18 @@ export function BottomBar({
                       <button
                         className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
-                        onClick={() => onCreateVirtual?.()}
+                        onClick={() => onCreateVirtual?.('capture')}
                       >
-                        <span className="bb-card-name">+ new device</span>
+                        <span className="bb-card-name">+ new mic</span>
                         <span className="bb-card-sub">create a virtual mic</span>
+                      </button>
+                      <button
+                        className="bb-card bb-card--add"
+                        tabIndex={active ? 0 : -1}
+                        onClick={() => onCreateVirtual?.('render')}
+                      >
+                        <span className="bb-card-name">+ new output</span>
+                        <span className="bb-card-sub">create a virtual output</span>
                       </button>
                     </div>
                     {virtualOther.length > 0 && (
