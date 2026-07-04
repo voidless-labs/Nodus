@@ -4,6 +4,7 @@
 #include "nodus.h"
 #include <ksmedia.h>
 #include <ntstrsafe.h>   // RtlStringCchPrintfW / RtlStringCchCopyW (dynamic names)
+#include <devpropdef.h>  // DEFINE_DEVPROPKEY / DEVPROP_TYPE_STRING (t8 endpoint name)
 #include "minwavert.h"
 #include "mintopo.h"
 #include "minwavecap.h"
@@ -157,58 +158,51 @@ static VOID NodusUnregisterConnection(PDEVICE_OBJECT Fdo, PPORT FromPort, ULONG 
     }
 }
 
-// ── Endpoint seeding (t10 §2b format + t8 §6.2 FriendlyName) ──────────────────
+// ── Endpoint seeding: t10 format + t8 per-endpoint name ──────────────────────
 // A dynamic subdevice registers its device interface at runtime under a
-// reference name the INF can't target. Two things must be written into that
-// interface's registry storage key from the kernel (SYSTEM, no elevation):
-//   • Default Format (EP\0) = 48000/2/16 — else audiodg may read our stereo ring
-//     as a mono default persisted for a reused id (2:1 decimation = "orc", t10).
-//   • FriendlyName (REG_SZ) = "<UI name> (Nodus Voice|Audio)" — per-endpoint name
-//     from the UI (ADR §6.2; same value the INF writes via HKR,,FriendlyName, so
-//     AudioEndpointBuilder is known to read it).
+// reference name the INF can't target. From the kernel (SYSTEM — no elevation,
+// which the userspace IPolicyConfig path lacked) we seed values into that
+// interface's registry storage key:
+//   • EP\0 Default Format = 48000/2/16 — else audiodg may read our stereo ring
+//     as a persisted mono default (2:1 decimation = "orc", t10). Confirmed live.
+//   • EP\0 endpoint properties — AudioEndpointBuilder migrates EP\<pin> values
+//     into the endpoint's MMDevices property store when it builds the endpoint
+//     (idea from Fable). We seed PKEY_Device_FriendlyName (full name override,
+//     like mmsys "rename") and PKEY_Device_DeviceDesc there.
+//   • DEVPKEY_DeviceInterface_FriendlyName via IoSetDeviceInterfacePropertyData —
+//     the MODERN device-interface property (distinct from the legacy FriendlyName
+//     value, which AudioEndpointBuilder ignored on 1.0.50).
 //
-// Format value = WAVEFORMATEXTENSIBLE, 48000/2ch/16-bit PCM — byte-identical to
-// nodus_audio.inf's HKR,EP\0 seed.
+// t8 experiment (05.07): the three carry DISTINGUISHABLE strings so the resulting
+// mmsys name identifies which mechanism won —
+//   "<UI> (Nodus Voice)"             → EP\0 FriendlyName won (ideal, exact Variant B)
+//   "<UI> (Nodus Virtual Audio)"     → EP\0 DeviceDesc drove the left part
+//   "Микрофон (Nodus Voice)"         → DEVPKEY drove the parenthetical
+//   "Микрофон (Nodus Virtual Audio)" → none took (→ plan B: pin Name-GUID)
+
+// DEVPKEY_DeviceInterface_FriendlyName = {026e516e-b814-414b-83cd-856d6fef4822},2
+DEFINE_DEVPROPKEY(NODUS_DEVPKEY_IfFriendlyName,
+                  0x026e516e, 0xb814, 0x414b, 0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22, 2);
+
+// WAVEFORMATEXTENSIBLE, 48000/2ch/16-bit PCM — byte-identical to the INF EP\0 seed.
 static const UCHAR g_NodusStereoFormat[] = {
     0xFE,0xFF, 0x02,0x00, 0x80,0xBB,0x00,0x00, 0x00,0xEE,0x02,0x00,
     0x04,0x00, 0x10,0x00, 0x16,0x00, 0x10,0x00, 0x03,0x00,0x00,0x00,
     0x01,0x00,0x00,0x00, 0x00,0x00,0x10,0x00, 0x80,0x00,0x00,0xAA, 0x00,0x38,0x9B,0x71
 };
 
-// Open the device-interface registry storage key for the subdevice registered
-// under Category with reference string RefName. On success caller ZwClose's *OutKey.
-static NTSTATUS NodusOpenInterfaceKey(_In_ const GUID* Category, _In_ PCWSTR RefName,
-                                      _In_ ACCESS_MASK Access, _Out_ PHANDLE OutKey)
+// Set a REG_SZ value (ZwSetValueKey copies the data — transient buffers are fine).
+static NTSTATUS NodusSetRegSz(_In_ HANDLE Key, _In_ PCWSTR ValueName, _In_ PCWSTR Data)
 {
-    PAGED_CODE();
-    *OutKey = nullptr;
-
-    PWSTR list = nullptr;
-    NTSTATUS status = IoGetDeviceInterfaces(Category, g_NodusAdapter.Pdo,
-                                            DEVICE_INTERFACE_INCLUDE_NONACTIVE, &list);
-    if (!NT_SUCCESS(status)) return status;
-    if (list == nullptr) return STATUS_NOT_FOUND;
-
-    const size_t refLen = wcslen(RefName);
-    status = STATUS_NOT_FOUND;
-    for (PWSTR link = list; *link; link += wcslen(link) + 1) {
-        // Device-interface symlinks end with "\<reference-string>"; match ours.
-        const size_t linkLen = wcslen(link);
-        if (linkLen < refLen + 1) continue;
-        PWSTR tail = link + (linkLen - refLen);
-        if (tail[-1] != L'\\' || _wcsicmp(tail, RefName) != 0) continue;
-
-        UNICODE_STRING symlink;
-        RtlInitUnicodeString(&symlink, link);
-        status = IoOpenDeviceInterfaceRegistryKey(&symlink, Access, OutKey);
-        break;
-    }
-    ExFreePool(list);
-    return status;
+    UNICODE_STRING v;
+    RtlInitUnicodeString(&v, ValueName);
+    const ULONG bytes = (ULONG)((wcslen(Data) + 1) * sizeof(WCHAR));
+    return ZwSetValueKey(Key, &v, 0, REG_SZ, (PVOID)Data, bytes);
 }
 
-// Write the Default Format into EP\0 under an already-open interface key.
-static NTSTATUS NodusWriteFormat(_In_ HANDLE InterfaceKey)
+// Open EP\0 under an interface key and seed the endpoint property values there.
+static VOID NodusSeedEp0(_In_ HANDLE InterfaceKey, _In_ BOOLEAN WriteFormat,
+                         _In_ PCWSTR Friendly, _In_ PCWSTR DeviceDesc)
 {
     HANDLE hEp = nullptr, hEp0 = nullptr;
     UNICODE_STRING sub;
@@ -218,62 +212,89 @@ static NTSTATUS NodusWriteFormat(_In_ HANDLE InterfaceKey)
     InitializeObjectAttributes(&oa, &sub, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, InterfaceKey, nullptr);
     NTSTATUS status = ZwCreateKey(&hEp, KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &oa, 0, nullptr,
                                   REG_OPTION_NON_VOLATILE, nullptr);
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) return;
 
     RtlInitUnicodeString(&sub, L"0");
     InitializeObjectAttributes(&oa, &sub, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, hEp, nullptr);
     status = ZwCreateKey(&hEp0, KEY_SET_VALUE, &oa, 0, nullptr, REG_OPTION_NON_VOLATILE, nullptr);
     if (NT_SUCCESS(status)) {
-        UNICODE_STRING valName;
-        RtlInitUnicodeString(&valName, L"{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0");
-        status = ZwSetValueKey(hEp0, &valName, 0, REG_BINARY,
-                               (PVOID)g_NodusStereoFormat, sizeof(g_NodusStereoFormat));
+        if (WriteFormat) {
+            UNICODE_STRING fmt;
+            RtlInitUnicodeString(&fmt, L"{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0");
+            ZwSetValueKey(hEp0, &fmt, 0, REG_BINARY, (PVOID)g_NodusStereoFormat, sizeof(g_NodusStereoFormat));
+        }
+        // PKEY_Device_FriendlyName ({a45c254e-…},14) + PKEY_Device_DeviceDesc (…,2).
+        NodusSetRegSz(hEp0, L"{a45c254e-df1c-4efd-8020-67d146a850e0},14", Friendly);
+        NodusSetRegSz(hEp0, L"{a45c254e-df1c-4efd-8020-67d146a850e0},2", DeviceDesc);
         ZwClose(hEp0);
     }
     ZwClose(hEp);
-    return status;
 }
 
-// Write the legacy FriendlyName (REG_SZ) at an interface key root. ZwSetValueKey
-// copies the data, so a caller-owned transient buffer is fine.
-static NTSTATUS NodusWriteFriendlyName(_In_ HANDLE InterfaceKey, _In_ PCWSTR Name)
-{
-    UNICODE_STRING valName;
-    RtlInitUnicodeString(&valName, L"FriendlyName");
-    const ULONG bytes = (ULONG)((wcslen(Name) + 1) * sizeof(WCHAR));
-    return ZwSetValueKey(InterfaceKey, &valName, 0, REG_SZ, (PVOID)Name, bytes);
-}
-
-// Seed a dynamic endpoint: Default Format on the wave interface + FriendlyName on
-// both the wave and topology interfaces (the endpoint name derives from the
-// topology filter; writing both is cheap and symmetric — ADR §6.2). Best-effort:
-// any miss only leaves the prior default/name, never fails the install.
-static VOID NodusSeedEndpoint(_In_ PCWSTR WaveRef, _In_ PCWSTR TopoRef,
-                              _In_ BOOLEAN Capture, _In_ PCWSTR FriendlyName)
+// Seed one interface of the pair: EP\0 (format optional + name/desc) via its
+// registry key, plus DEVPKEY_DeviceInterface_FriendlyName via the property API.
+static VOID NodusSeedInterface(_In_ const GUID* Category, _In_ PCWSTR RefName,
+                               _In_ BOOLEAN WriteFormat, _In_ PCWSTR Friendly,
+                               _In_ PCWSTR DeviceDesc, _In_ PCWSTR DevpkeyName)
 {
     PAGED_CODE();
 
+    PWSTR list = nullptr;
+    NTSTATUS status = IoGetDeviceInterfaces(Category, g_NodusAdapter.Pdo,
+                                            DEVICE_INTERFACE_INCLUDE_NONACTIVE, &list);
+    if (!NT_SUCCESS(status) || list == nullptr) {
+        DbgPrint("Nodus: seed %ws: IoGetDeviceInterfaces 0x%08X\n", RefName, status);
+        return;
+    }
+
+    const size_t refLen = wcslen(RefName);
+    for (PWSTR link = list; *link; link += wcslen(link) + 1) {
+        // Device-interface symlinks end with "\<reference-string>"; match ours.
+        const size_t linkLen = wcslen(link);
+        if (linkLen < refLen + 1) continue;
+        PWSTR tail = link + (linkLen - refLen);
+        if (tail[-1] != L'\\' || _wcsicmp(tail, RefName) != 0) continue;
+
+        UNICODE_STRING symlink;
+        RtlInitUnicodeString(&symlink, link);
+
+        // (A) EP\0 seeds + legacy FriendlyName via the interface registry key.
+        HANDLE hIf = nullptr;
+        NTSTATUS sReg = IoOpenDeviceInterfaceRegistryKey(&symlink, KEY_ALL_ACCESS, &hIf);
+        if (NT_SUCCESS(sReg)) {
+            NodusSeedEp0(hIf, WriteFormat, Friendly, DeviceDesc);
+            NodusSetRegSz(hIf, L"FriendlyName", Friendly);   // legacy value (harmless)
+            ZwClose(hIf);
+        }
+
+        // (C) Modern device-interface FriendlyName property.
+        const ULONG bytes = (ULONG)((wcslen(DevpkeyName) + 1) * sizeof(WCHAR));
+        NTSTATUS sDp = IoSetDeviceInterfacePropertyData(&symlink, &NODUS_DEVPKEY_IfFriendlyName,
+                                                        0, 0, DEVPROP_TYPE_STRING, bytes,
+                                                        (PVOID)DevpkeyName);
+        DbgPrint("Nodus: seed %ws reg(0x%08X) devpkey(0x%08X)\n", RefName, sReg, sDp);
+        break;
+    }
+    ExFreePool(list);
+}
+
+// Seed a dynamic endpoint's format + per-endpoint name on both interfaces of the
+// pair. Best-effort: any miss only leaves the prior default/name, never fails
+// the install.
+static VOID NodusSeedEndpoint(_In_ PCWSTR WaveRef, _In_ PCWSTR TopoRef,
+                              _In_ BOOLEAN Capture, _In_ PCWSTR UiName)
+{
+    PAGED_CODE();
+
+    // Variant B: "<UI> (Nodus Voice|Audio)". DeviceDesc = UI name only and DEVPKEY
+    // = brand only, so the three mechanisms produce distinguishable mmsys strings.
+    PCWSTR brand = Capture ? L"Nodus Voice" : L"Nodus Audio";
+    WCHAR full[NODUS_MAX_NAME_CCH + 16];
+    RtlStringCchPrintfW(full, RTL_NUMBER_OF(full), L"%ws (%ws)", UiName, brand);
+
     const GUID* waveCat = Capture ? &KSCATEGORY_CAPTURE : &KSCATEGORY_RENDER;
-
-    HANDLE hWave = nullptr;
-    NTSTATUS s = NodusOpenInterfaceKey(waveCat, WaveRef, KEY_ALL_ACCESS, &hWave);
-    if (NT_SUCCESS(s)) {
-        NTSTATUS sf = NodusWriteFormat(hWave);
-        NTSTATUS sn = NodusWriteFriendlyName(hWave, FriendlyName);
-        ZwClose(hWave);
-        DbgPrint("Nodus: seed %ws fmt(0x%08X) name(0x%08X) '%ws'\n", WaveRef, sf, sn, FriendlyName);
-    } else {
-        DbgPrint("Nodus: seed %ws: wave iface 0x%08X\n", WaveRef, s);
-    }
-
-    HANDLE hTopo = nullptr;
-    s = NodusOpenInterfaceKey(&KSCATEGORY_TOPOLOGY, TopoRef, KEY_SET_VALUE, &hTopo);
-    if (NT_SUCCESS(s)) {
-        NodusWriteFriendlyName(hTopo, FriendlyName);
-        ZwClose(hTopo);
-    } else {
-        DbgPrint("Nodus: seed %ws: topo iface 0x%08X\n", TopoRef, s);
-    }
+    NodusSeedInterface(waveCat, WaveRef, TRUE, full, UiName, brand);
+    NodusSeedInterface(&KSCATEGORY_TOPOLOGY, TopoRef, FALSE, full, UiName, brand);
 }
 
 NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
@@ -345,14 +366,9 @@ NTSTATUS NodusInstallDynamicDevice(ULONG Id, ULONG Kind, PCWSTR FriendlyName)
     slot->Topo  = topoPort;
     RtlStringCchCopyW(slot->Name, RTL_NUMBER_OF(slot->Name), FriendlyName);
 
-    // Compose the endpoint name "<UI name> (Nodus Voice|Audio)" (Variant B: the
-    // distinguishing UI name leads, the brand tags the type). Then seed the
-    // endpoint's Default Format (stereo, kills "orc") + FriendlyName in one pass.
-    // Best-effort: a miss only leaves the prior default/name, never fails install.
-    WCHAR composed[NODUS_MAX_NAME_CCH + 16];
-    RtlStringCchPrintfW(composed, RTL_NUMBER_OF(composed), L"%ws (%ws)",
-                        FriendlyName, capture ? L"Nodus Voice" : L"Nodus Audio");
-    NodusSeedEndpoint(slot->WaveName, slot->TopoName, capture, composed);
+    // Seed the endpoint's Default Format (stereo, kills "orc") + per-endpoint name
+    // (composes "<UI> (Nodus Voice|Audio)" internally). Best-effort.
+    NodusSeedEndpoint(slot->WaveName, slot->TopoName, capture, FriendlyName);
 
     DbgPrint("Nodus: dynamic device id=%u kind=%u installed (%ws)\n", Id, Kind, slot->WaveName);
     return STATUS_SUCCESS;
