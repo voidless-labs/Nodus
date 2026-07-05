@@ -474,6 +474,44 @@ static NTSTATUS NodusIoctlDestroyDevice(_In_opt_ PVOID Buffer, _In_ ULONG InLen)
     return STATUS_SUCCESS;
 }
 
+// Rename a live device's persisted name in place — no destroy+recreate. The
+// endpoint's Windows display name is set separately (userspace broker); this
+// keeps slot->Name (the LIST/UI source of truth and the re-assert seed) current
+// so the name survives reboots and endpoint recreation. (t8 ReName)
+static NTSTATUS NodusIoctlSetName(_In_opt_ PVOID Buffer, _In_ ULONG InLen)
+{
+    PAGED_CODE();
+
+    if (Buffer == nullptr || InLen < sizeof(NODUS_SET_NAME_INPUT)) {
+        DbgPrint("Nodus: ioctl SET_NAME rejected: in=%u\n", InLen);
+        return STATUS_INVALID_PARAMETER;
+    }
+    const NODUS_SET_NAME_INPUT* in = (const NODUS_SET_NAME_INPUT*)Buffer;
+    if (in->Size != sizeof(NODUS_SET_NAME_INPUT)) {
+        DbgPrint("Nodus: ioctl SET_NAME rejected: Size=%u\n", in->Size);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (in->Id == 0 || in->Id > NODUS_MAX_DYNAMIC_DEVICES) {
+        DbgPrint("Nodus: ioctl SET_NAME rejected: Id=%u\n", in->Id);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!NodusNameIsValid(in->FriendlyName)) {
+        DbgPrint("Nodus: ioctl SET_NAME rejected: bad FriendlyName\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    NODUS_DYNAMIC_DEVICE* slot = &g_NodusAdapter.Dynamic[in->Id - 1];
+    if (!slot->InUse) {
+        DbgPrint("Nodus: SET_NAME id=%u not found\n", in->Id);
+        return STATUS_NOT_FOUND;
+    }
+
+    RtlStringCchCopyW(slot->Name, NODUS_MAX_NAME_CCH, in->FriendlyName);
+    NodusPersistTable();   // survive reboot (S3.4)
+    DbgPrint("Nodus: SET_NAME -> id=%u (%ws)\n", in->Id, slot->Name);
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS NodusHandleControl(_In_ PIRP Irp)
 {
     PIO_STACK_LOCATION sp = IoGetCurrentIrpStackLocation(Irp);
@@ -514,6 +552,9 @@ static NTSTATUS NodusHandleControl(_In_ PIRP Irp)
             break;
         case IOCTL_NODUS_LIST_DEVICES:
             status = NodusIoctlListDevices(buffer, outLen, &information);
+            break;
+        case IOCTL_NODUS_SET_NAME:
+            status = NodusIoctlSetName(buffer, inLen);
             break;
         default:
             DbgPrint("Nodus: ioctl 0x%08X unknown -> INVALID_DEVICE_REQUEST\n", code);

@@ -53,12 +53,18 @@ DEFINE_GUID(GUID_DEVINTERFACE_NODUS_CONTROL,
 #define IOCTL_NODUS_CREATE_DEVICE  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_NODUS_DESTROY_DEVICE CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_NODUS_LIST_DEVICES   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+// Rename a live device's persisted name in place (no destroy+recreate). The
+// endpoint's Windows display name is set separately in userspace (broker); this
+// keeps the driver's name — the UI/list source of truth and the re-assert seed —
+// in sync. (t8 ReName)
+#define IOCTL_NODUS_SET_NAME       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Wire values, pinned for the Rust mirror (which hardcodes the numbers).
 C_ASSERT(IOCTL_NODUS_QUERY_VERSION  == 0x00222000);
 C_ASSERT(IOCTL_NODUS_CREATE_DEVICE  == 0x00222004);
 C_ASSERT(IOCTL_NODUS_DESTROY_DEVICE == 0x00222008);
 C_ASSERT(IOCTL_NODUS_LIST_DEVICES   == 0x0022200C);
+C_ASSERT(IOCTL_NODUS_SET_NAME       == 0x00222010);
 
 // ---------------------------------------------------------------------------
 // Limits and enums (ADR §5, §7).
@@ -119,6 +125,17 @@ typedef struct _NODUS_DESTROY_DEVICE_INPUT {
     ULONG Reserved0;            // offset 12: 0
 } NODUS_DESTROY_DEVICE_INPUT;
 
+// IOCTL_NODUS_SET_NAME input; no output. Id 0 (static) is refused; unknown id ->
+// STATUS_NOT_FOUND. Same name rules as CREATE (NUL within NODUS_MAX_NAME_CCH,
+// non-empty). Layout matches CREATE minus Kind/RequestedId.
+typedef struct _NODUS_SET_NAME_INPUT {
+    ULONG Size;                 // offset  0: 144
+    ULONG Id;                   // offset  4: 1..8
+    ULONG Flags;                // offset  8: 0, reserved
+    ULONG Reserved0;            // offset 12: 0
+    WCHAR FriendlyName[NODUS_MAX_NAME_CCH]; // offset 16: UTF-16, NUL-terminated, non-empty
+} NODUS_SET_NAME_INPUT;
+
 // One device slot in the LIST snapshot.
 typedef struct _NODUS_DEVICE_INFO {
     ULONG Id;                   // offset  0
@@ -168,6 +185,13 @@ C_ASSERT(FIELD_OFFSET(NODUS_DESTROY_DEVICE_INPUT, Id)        ==  4);
 C_ASSERT(FIELD_OFFSET(NODUS_DESTROY_DEVICE_INPUT, Flags)     ==  8);
 C_ASSERT(FIELD_OFFSET(NODUS_DESTROY_DEVICE_INPUT, Reserved0) == 12);
 C_ASSERT(sizeof(NODUS_DESTROY_DEVICE_INPUT)                  == 16);
+
+C_ASSERT(FIELD_OFFSET(NODUS_SET_NAME_INPUT, Size)         ==   0);
+C_ASSERT(FIELD_OFFSET(NODUS_SET_NAME_INPUT, Id)           ==   4);
+C_ASSERT(FIELD_OFFSET(NODUS_SET_NAME_INPUT, Flags)        ==   8);
+C_ASSERT(FIELD_OFFSET(NODUS_SET_NAME_INPUT, Reserved0)    ==  12);
+C_ASSERT(FIELD_OFFSET(NODUS_SET_NAME_INPUT, FriendlyName) ==  16);
+C_ASSERT(sizeof(NODUS_SET_NAME_INPUT)                     == 144);
 
 C_ASSERT(FIELD_OFFSET(NODUS_DEVICE_INFO, Id)           ==  0);
 C_ASSERT(FIELD_OFFSET(NODUS_DEVICE_INFO, Kind)         ==  4);
