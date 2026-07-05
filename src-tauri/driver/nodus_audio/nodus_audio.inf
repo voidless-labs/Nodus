@@ -91,7 +91,7 @@ nodus_audio.sys = 1
 ; ============================================================
 [Strings]
 Provider     = "Nodus"
-DeviceDesc   = "Nodus Virtual Audio"
+DeviceDesc   = "Nodus"
 ServiceDesc  = "Nodus Virtual Audio Service"
 Wave.Desc    = "Nodus Virtual Speaker"
 Topo.Desc    = "Nodus Virtual Speaker Topology"
