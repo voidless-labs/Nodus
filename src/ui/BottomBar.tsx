@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import './BottomBar.css';
 import type { AudioDevice } from '../bridge';
 import { EditableName } from './nodes/EditableName';
@@ -49,7 +49,7 @@ export function BottomBar({
   virtualOwn = [],
   virtualOther = [],
   createdIds,
-  editingId,
+  defaultVirtualName,
   onCreateVirtual,
   onRenameVirtual,
   onDeleteVirtual,
@@ -61,9 +61,10 @@ export function BottomBar({
   virtualOther?: AudioDevice[];
   /** Ids of user-created virtual devices — these are renamable / deletable. */
   createdIds?: Set<string>;
-  /** A just-created device id — its name field opens for editing. */
-  editingId?: string | null;
-  onCreateVirtual?: (kind: 'render' | 'capture') => void;
+  /** Suggested default name shown (prefilled, editable) before a device is made. */
+  defaultVirtualName?: (kind: 'render' | 'capture') => string;
+  /** Called with the confirmed name; the device is created only then. */
+  onCreateVirtual?: (kind: 'render' | 'capture', name: string) => void;
   onRenameVirtual?: (id: string, name: string) => void;
   onDeleteVirtual?: (id: string) => void;
   /** Begin a pointer-based drag of a catalog node / device onto the canvas. */
@@ -78,6 +79,23 @@ export function BottomBar({
   // Remember the last category so the list keeps its content while it
   // animates closed (the wrapper stays mounted for a smooth height collapse).
   const [lastTab, setLastTab] = useState<Tab>('routing');
+
+  // A new virtual device is named BEFORE it is created: "+ new mic/output" opens
+  // an editable card prefilled with the suggested name; the device is created
+  // only on commit (Enter/blur), empty → the suggested default. Escape cancels.
+  const [pending, setPending] = useState<{ kind: 'render' | 'capture'; name: string } | null>(null);
+  const committedRef = useRef(false);
+  const beginCreate = (kind: 'render' | 'capture') => {
+    committedRef.current = false;
+    setPending({ kind, name: defaultVirtualName?.(kind) ?? '' });
+  };
+  const commitCreate = () => {
+    if (committedRef.current || !pending) return;
+    committedRef.current = true;
+    const { kind, name } = pending;
+    setPending(null);
+    onCreateVirtual?.(kind, name);
+  };
   const [q, setQ] = useState('');
 
   const setQuery = (v: string) => {
@@ -109,7 +127,9 @@ export function BottomBar({
   // (each drag = another instance of the SAME device). Ignore presses that land
   // on the card's interactive bits (rename input / delete ×).
   const startDevice = (e: React.PointerEvent, dev: AudioDevice, label: string) => {
-    if ((e.target as HTMLElement).closest('input, .bb-card-x')) return;
+    // The editable name label handles its own double-click to rename — a
+    // pointer-down there must NOT start a drag/place (which collapses the bar).
+    if ((e.target as HTMLElement).closest('input, .bb-card-x, .bb-card-name-edit')) return;
     onBeginPlace?.(e, { kind: 'device', id: dev.id }, label, () => {});
     setActive(null);
   };
@@ -132,9 +152,8 @@ export function BottomBar({
       >
         {created ? (
           <EditableName
-            className="bb-card-name"
+            className="bb-card-name bb-card-name-edit"
             value={dev.name}
-            autoEdit={editingId === dev.id}
             placeholder="Set a name for the virtual mic"
             onRename={(nm) => onRenameVirtual?.(dev.id, nm)}
           />
@@ -185,10 +204,31 @@ export function BottomBar({
                     <div className="bb-group-h">ours</div>
                     <div className="bb-grid">
                       {virtualOwn.map((dev) => deviceCard(dev))}
+                      {pending && (
+                        <div className="bb-card">
+                          <input
+                            className="bb-card-name name-input"
+                            autoFocus
+                            value={pending.name}
+                            placeholder={defaultVirtualName?.(pending.kind)}
+                            onChange={(e) => setPending({ ...pending, name: e.target.value })}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') commitCreate();
+                              if (e.key === 'Escape') setPending(null);
+                            }}
+                            onBlur={commitCreate}
+                          />
+                          <span className="bb-card-sub">
+                            name it · Enter to create · Esc to cancel
+                          </span>
+                        </div>
+                      )}
                       <button
                         className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
-                        onClick={() => onCreateVirtual?.('capture')}
+                        onClick={() => beginCreate('capture')}
                       >
                         <span className="bb-card-name">+ new mic</span>
                         <span className="bb-card-sub">create a virtual mic</span>
@@ -196,7 +236,7 @@ export function BottomBar({
                       <button
                         className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
-                        onClick={() => onCreateVirtual?.('render')}
+                        onClick={() => beginCreate('render')}
                       >
                         <span className="bb-card-name">+ new output</span>
                         <span className="bb-card-sub">create a virtual output</span>

@@ -479,6 +479,16 @@ export async function removeVirtualDevice(id: number): Promise<unknown> {
   return call('remove_virtual_device', { id });
 }
 
+/** Rename an existing dynamic device in place (driver name + Windows endpoint). */
+export async function renameVirtualDevice(
+  id: number,
+  kind: 'render' | 'capture',
+  name: string,
+): Promise<unknown> {
+  if (!isTauri && !_daemon) return null;
+  return call('rename_virtual_device', { id, kind, name });
+}
+
 // ── Window controls (custom title bar) ──────────────────────────────────────
 // Lazy import of @tauri-apps/api/window so the plain Vite preview (no Tauri)
 // never loads it; every control is a no-op in the browser.

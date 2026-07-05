@@ -158,6 +158,7 @@ fn main() {
             nodus::commands::bridge::list_virtual_devices,
             nodus::commands::bridge::create_virtual_device,
             nodus::commands::bridge::remove_virtual_device,
+            nodus::commands::bridge::rename_virtual_device,
         ])
         .system_tray(build_tray())
         .on_system_tray_event(|app, event| match event {

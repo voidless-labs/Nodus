@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager, State};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     audio::{
@@ -202,10 +202,83 @@ pub async fn create_virtual_device(kind: String, name: String) -> Result<Virtual
     tokio::task::spawn_blocking(move || {
         let ctl = open_control().map_err(|e| e.to_string())?;
         let id = ctl.create_device(k, None, &name).map_err(|e| e.to_string())?;
+
+        // Name the endpoint = the UI name; system shows "<name> (Nodus)". Writes
+        // PKEY_Device_DeviceDesc via the AudioEndpointBuilder broker (a manual
+        // rename, no elevation). Endpoint ↔ ring id is matched via IDeviceTopology.
+        // Best-effort: a failure only leaves Windows' default composed name.
+        #[cfg(target_os = "windows")]
+        {
+            let _com = ComGuard::init();
+            let is_capture = matches!(k, DeviceKind::Capture);
+            match crate::audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
+                Ok(eid) => info!("named virtual endpoint {eid} (ring {id}) = '{name}'"),
+                Err(e) => warn!("virtual endpoint name skipped: {e}"),
+            }
+        }
+
         Ok(VirtualDeviceInfo { id, kind: k, name, is_static: false, ring_active: false })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Rename an existing dynamic device in place (t8 ReName) — no destroy+recreate.
+/// Updates the driver's persisted name (SET_NAME IOCTL, the LIST/UI source of
+/// truth) and the Windows endpoint display name (broker, via IDeviceTopology
+/// correlation). Both best-effort; the driver name is the authoritative one.
+#[tauri::command]
+pub async fn rename_virtual_device(id: u32, kind: String, name: String) -> Result<(), String> {
+    let k = match kind.as_str() {
+        "render" => DeviceKind::Render,
+        "capture" => DeviceKind::Capture,
+        other => return Err(format!("unknown kind '{other}' (use render|capture)")),
+    };
+    tokio::task::spawn_blocking(move || {
+        let ctl = open_control().map_err(|e| e.to_string())?;
+        ctl.set_name(id, &name).map_err(|e| e.to_string())?;
+
+        #[cfg(target_os = "windows")]
+        {
+            let _com = ComGuard::init();
+            let is_capture = matches!(k, DeviceKind::Capture);
+            match crate::audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
+                Ok(eid) => info!("renamed virtual endpoint {eid} (ring {id}) = '{name}'"),
+                Err(e) => warn!("virtual endpoint rename skipped: {e}"),
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = k;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Re-assert every dynamic device's endpoint name from the driver's persisted
+/// names. Endpoint property stores get wiped whenever endpoints are recreated
+/// (a DeviceDesc change, a driver update), so on startup we rewrite `,2` = the
+/// UI name — the names then always converge with what the driver holds. Windows
+/// only; best-effort. Runs on its own thread (blocking COM + polling).
+#[cfg(target_os = "windows")]
+pub fn reassert_virtual_names() {
+    std::thread::spawn(|| {
+        let _com = ComGuard::init();
+        let devices = match open_control().and_then(|c| c.list_devices()) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("re-assert names: list failed: {e}");
+                return;
+            }
+        };
+        for dev in devices.into_iter().filter(|d| !d.is_static) {
+            let is_capture = matches!(dev.kind, DeviceKind::Capture);
+            match crate::audio::endpoint_name::set_name_for_ring(dev.id, is_capture, &dev.name) {
+                Ok(eid) => info!("re-assert endpoint {eid} (ring {}) = '{}'", dev.id, dev.name),
+                Err(e) => warn!("re-assert ring {}: {e}", dev.id),
+            }
+        }
+    });
 }
 
 /// Destroy a dynamic virtual device by its driver id (1..8; id 0 is refused).
@@ -311,6 +384,12 @@ pub fn setup_background_tasks(
             Err(e) => error!("failed to enumerate devices on startup: {e}"),
         }
     });
+
+    // Re-assert dynamic endpoint names (idempotent): endpoint property stores are
+    // wiped when endpoints are recreated (DeviceDesc change / driver update), so
+    // rewrite each `,2` = the driver's persisted UI name on startup.
+    #[cfg(target_os = "windows")]
+    reassert_virtual_names();
 
     // VU meter — publishes "volume-levels" at ~15fps when the engine is running, and
     // only when the levels actually changed: every event triggers a WebView repaint,

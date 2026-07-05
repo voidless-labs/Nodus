@@ -1,5 +1,7 @@
 pub mod device_control;
 pub mod devices;
+#[cfg(target_os = "windows")]
+pub mod endpoint_name;
 pub(crate) mod ring_layout;
 pub mod session;
 pub mod virtual_capture;

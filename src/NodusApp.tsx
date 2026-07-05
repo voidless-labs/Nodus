@@ -6,6 +6,7 @@ import {
   listVirtualDevices,
   createVirtualDevice as bridgeCreateVirtualDevice,
   removeVirtualDevice as bridgeRemoveVirtualDevice,
+  renameVirtualDevice as bridgeRenameVirtualDevice,
   type AudioDevice,
   type VirtualDeviceInfo,
 } from './bridge';
@@ -57,7 +58,6 @@ export default function NodusApp() {
   // (Routing a dynamic device through the engine — mapping its WASAPI endpoint to
   // its ring — completes with t8 name correlation; here we manage create/delete.)
   const [managed, setManaged] = useState<VirtualDeviceInfo[]>([]);
-  const [pendingVirtualEdit, setPendingVirtualEdit] = useState<string | null>(null);
   const refreshManaged = useCallback(() => {
     void listVirtualDevices().then(setManaged).catch((e) => console.error('list_virtual_devices:', e));
   }, []);
@@ -65,11 +65,24 @@ export default function NodusApp() {
     if (backend.ready) refreshManaged();
   }, [backend.ready, refreshManaged]);
 
-  // Static Nodus endpoints from the OS enumeration (real, routable — keep as-is).
-  const staticOwn = useMemo(
-    () => backend.devices.filter((d) => d.is_virtual && isOwnVirtual(d)),
-    [backend.devices],
-  );
+  // Static Nodus endpoints from the OS enumeration (real, routable). Exclude the
+  // DYNAMIC ones: those are shown from the driver table (dynamicOwn) with their
+  // authoritative name. Windows also lists them (with the system "(Nodus)"
+  // suffix), which would duplicate the card and lag behind a rename until
+  // re-enumeration (t22). Match by name-contains: a dynamic endpoint's system
+  // name is "<driver name> (Nodus)", so it contains the driver name.
+  const staticOwn = useMemo(() => {
+    const dyn = managed
+      .filter((m) => !m.is_static)
+      .map((m) => m.name.toLowerCase())
+      .filter(Boolean);
+    return backend.devices.filter(
+      (d) =>
+        d.is_virtual &&
+        isOwnVirtual(d) &&
+        !dyn.some((n) => d.name.toLowerCase().includes(n)),
+    );
+  }, [backend.devices, managed]);
   // Dynamic devices from the driver table, mapped to the card shape. Synthetic id
   // `nodus:<driverId>` so delete/rename can recover the driver id.
   const dynamicOwn = useMemo<AudioDevice[]>(
@@ -107,28 +120,38 @@ export default function NodusApp() {
     return m ? Number(m[1]) : null;
   };
 
-  const createVirtualDevice = useCallback(
+  // Suggested default name for a new device (brand carries the type; Windows
+  // appends the "(Nodus)" adapter suffix → "Nodus Voice 1 (Nodus)").
+  const defaultVirtualName = useCallback(
     (kind: 'render' | 'capture') => {
       const n = managed.filter((m) => !m.is_static && m.kind === kind).length + 1;
-      const name = kind === 'capture' ? `Nodus Mic ${n}` : `Nodus Output ${n}`;
-      void bridgeCreateVirtualDevice(kind, name)
-        .then((info) => {
-          refreshManaged();
-          if (info) setPendingVirtualEdit(`nodus:${info.id}`); // open its name field
-        })
-        .catch((e) => console.error('create_virtual_device:', e));
+      return kind === 'capture' ? `Nodus Voice ${n}` : `Nodus Audio ${n}`;
     },
-    [managed, refreshManaged],
+    [managed],
   );
 
-  // No SET_NAME IOCTL yet (ADR §6.2): rename = destroy + recreate with the new name.
+  // The device is created only once the name is confirmed (the BottomBar shows an
+  // editable card first). An empty name falls back to the suggested default. The
+  // name is applied AT creation — no fragile destroy+recreate rename afterwards.
+  const createVirtualDevice = useCallback(
+    (kind: 'render' | 'capture', name: string) => {
+      const finalName = name.trim() || defaultVirtualName(kind);
+      void bridgeCreateVirtualDevice(kind, finalName)
+        .then(() => refreshManaged())
+        .catch((e) => console.error('create_virtual_device:', e));
+    },
+    [defaultVirtualName, refreshManaged],
+  );
+
+  // ReName an existing device in place — SET_NAME IOCTL (driver name) + endpoint
+  // rename via the broker. No destroy+recreate: no audio glitch, no endpoint
+  // churn, correlation stays deterministic.
   const renameVirtual = useCallback(
     (id: string, name: string) => {
       const driverId = driverIdOf(id);
       const dev = managed.find((m) => m.id === driverId && !m.is_static);
-      if (driverId == null || !dev) return;
-      void bridgeRemoveVirtualDevice(driverId)
-        .then(() => bridgeCreateVirtualDevice(dev.kind, name))
+      if (driverId == null || !dev || !name.trim()) return;
+      void bridgeRenameVirtualDevice(driverId, dev.kind, name.trim())
         .then(() => refreshManaged())
         .catch((e) => console.error('rename_virtual_device:', e));
     },
@@ -467,12 +490,9 @@ export default function NodusApp() {
           virtualOwn={virtualOwn}
           virtualOther={virtualOther}
           createdIds={createdIds}
-          editingId={pendingVirtualEdit}
+          defaultVirtualName={defaultVirtualName}
           onCreateVirtual={createVirtualDevice}
-          onRenameVirtual={(id, name) => {
-            renameVirtual(id, name);
-            setPendingVirtualEdit(null);
-          }}
+          onRenameVirtual={renameVirtual}
           onDeleteVirtual={deleteVirtual}
           onBeginPlace={place.begin}
         />

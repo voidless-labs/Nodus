@@ -54,6 +54,7 @@ pub const IOCTL_NODUS_QUERY_VERSION: u32 = nodus_ctl_code(0x800);
 pub const IOCTL_NODUS_CREATE_DEVICE: u32 = nodus_ctl_code(0x801);
 pub const IOCTL_NODUS_DESTROY_DEVICE: u32 = nodus_ctl_code(0x802);
 pub const IOCTL_NODUS_LIST_DEVICES: u32 = nodus_ctl_code(0x803);
+pub const IOCTL_NODUS_SET_NAME: u32 = nodus_ctl_code(0x804);
 
 /// `GUID_DEVINTERFACE_NODUS_CONTROL` = {56AEE59C-38D8-47E1-8943-94F74A989A92}.
 /// Issued by the Team Lead for t5; the kernel side registers the same GUID.
@@ -80,6 +81,8 @@ pub(crate) const CREATE_DEVICE_INPUT_SIZE: u32 = 152;
 pub(crate) const CREATE_DEVICE_OUTPUT_SIZE: u32 = 16;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const DESTROY_DEVICE_INPUT_SIZE: u32 = 16;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const SET_NAME_INPUT_SIZE: u32 = 144; // 16 + 64 × 2
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const LIST_DEVICES_OUTPUT_SIZE: u32 = 1456; // 16 + 10 × 144
 
@@ -128,6 +131,18 @@ pub(crate) struct DestroyDeviceInput {
     pub(crate) id: u32,        // offset 4
     pub(crate) flags: u32,     // offset 8 — 0, reserved
     pub(crate) reserved0: u32, // offset 12
+}
+
+/// `NODUS_SET_NAME_INPUT` — 144 bytes (CREATE minus kind/requested_id).
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct SetNameInput {
+    pub(crate) size: u32,      // offset 0  — 144
+    pub(crate) id: u32,        // offset 4  — 1..8
+    pub(crate) flags: u32,     // offset 8  — 0, reserved
+    pub(crate) reserved0: u32, // offset 12
+    pub(crate) friendly_name: [u16; MAX_NAME_CCH], // offset 16
 }
 
 /// `NODUS_DEVICE_INFO` — 144 bytes.
@@ -313,6 +328,23 @@ pub(crate) fn build_create_input(
         flags: 0,
         friendly_name: encode_friendly_name(name)?,
         reserved0: 0,
+    })
+}
+
+/// Build a validated NODUS_SET_NAME_INPUT (rename an existing device in place).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn build_set_name_input(id: u32, name: &str) -> Result<SetNameInput, ControlError> {
+    if id == 0 || id > MAX_DYNAMIC_DEVICES {
+        return Err(ControlError::InvalidArgument(format!(
+            "id {id} out of range 1..{MAX_DYNAMIC_DEVICES}"
+        )));
+    }
+    Ok(SetNameInput {
+        size: SET_NAME_INPUT_SIZE,
+        id,
+        flags: 0,
+        reserved0: 0,
+        friendly_name: encode_friendly_name(name)?,
     })
 }
 
@@ -552,6 +584,15 @@ pub mod platform {
             self.ioctl(IOCTL_NODUS_DESTROY_DEVICE, as_bytes(&input), &mut [])?;
             Ok(())
         }
+
+        /// IOCTL_NODUS_SET_NAME (t8 ReName). Rename a live device in place — no
+        /// destroy+recreate. Updates the driver's persisted name; the endpoint's
+        /// Windows display name is set separately via the broker.
+        pub fn set_name(&self, id: u32, name: &str) -> Result<(), ControlError> {
+            let input = build_set_name_input(id, name)?;
+            self.ioctl(IOCTL_NODUS_SET_NAME, as_bytes(&input), &mut [])?;
+            Ok(())
+        }
     }
 
     impl Drop for DeviceControl {
@@ -592,6 +633,9 @@ pub mod platform {
         pub fn destroy_device(&self, _id: u32) -> Result<(), ControlError> {
             Err(ControlError::Unsupported)
         }
+        pub fn set_name(&self, _id: u32, _name: &str) -> Result<(), ControlError> {
+            Err(ControlError::Unsupported)
+        }
     }
 }
 
@@ -621,6 +665,18 @@ mod tests {
         assert_eq!(IOCTL_NODUS_CREATE_DEVICE, 0x0022_2004); // Fn 0x801
         assert_eq!(IOCTL_NODUS_DESTROY_DEVICE, 0x0022_2008); // Fn 0x802
         assert_eq!(IOCTL_NODUS_LIST_DEVICES, 0x0022_200C); // Fn 0x803
+        assert_eq!(IOCTL_NODUS_SET_NAME, 0x0022_2010); // Fn 0x804
+    }
+
+    #[test]
+    fn set_name_input_layout() {
+        assert_eq!(offset_of!(SetNameInput, size), 0);
+        assert_eq!(offset_of!(SetNameInput, id), 4);
+        assert_eq!(offset_of!(SetNameInput, flags), 8);
+        assert_eq!(offset_of!(SetNameInput, reserved0), 12);
+        assert_eq!(offset_of!(SetNameInput, friendly_name), 16);
+        assert_eq!(size_of::<SetNameInput>(), 144);
+        assert_eq!(SET_NAME_INPUT_SIZE, 144);
     }
 
     #[test]
