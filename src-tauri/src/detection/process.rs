@@ -66,6 +66,29 @@ fn classify_exe(exe: &str) -> Option<(&'static str, SourceType)> {
     }
 }
 
+/// OS audio plumbing / shell processes that always hold a render session but are
+/// not a user "source" — hidden from session-based detection (t23). Our own
+/// process is excluded separately by PID.
+fn is_system_session_exe(exe_lower: &str) -> bool {
+    matches!(
+        exe_lower,
+        "svchost.exe"
+            | "audiodg.exe"
+            | "dwm.exe"
+            | "csrss.exe"
+            | "wininit.exe"
+            | "taskhostw.exe"
+            | "sihost.exe"
+            | "runtimebroker.exe"
+            | "ctfmon.exe"
+            | "explorer.exe"
+            | "searchhost.exe"
+            | "shellexperiencehost.exe"
+            | "startmenuexperiencehost.exe"
+            | "applicationframehost.exe"
+    )
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
@@ -75,8 +98,77 @@ mod platform {
         TH32CS_SNAPPROCESS,
     };
 
-    /// Snapshot all running processes, return those matching known audio apps.
-    /// Deduplicated by exe name — multi-process apps (browsers, Discord) show once.
+    /// PIDs that currently hold a render audio session — i.e. apps actually using
+    /// audio, whether or not they are in the known-exe list. This is what catches
+    /// a game (or any app) that produces sound but isn't hard-coded (t23).
+    /// Best-effort: returns empty on any COM failure. pid 0 (system sounds) skipped.
+    fn audio_session_pids() -> std::collections::HashSet<u32> {
+        use crate::audio::wasapi::ComGuard;
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::{
+            eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
+            MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        let mut pids = std::collections::HashSet::new();
+        let _com = match ComGuard::init() {
+            Ok(c) => c,
+            Err(_) => return pids,
+        };
+        unsafe {
+            let en: IMMDeviceEnumerator =
+                match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+                    Ok(e) => e,
+                    Err(_) => return pids,
+                };
+            let coll = match en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) {
+                Ok(c) => c,
+                Err(_) => return pids,
+            };
+            for i in 0..coll.GetCount().unwrap_or(0) {
+                let dev = match coll.Item(i) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let mgr: IAudioSessionManager2 = match dev.Activate(CLSCTX_ALL, None) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let se = match mgr.GetSessionEnumerator() {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                for j in 0..se.GetCount().unwrap_or(0) {
+                    let ctrl = match se.GetSession(j) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let ctrl2: IAudioSessionControl2 = match ctrl.cast() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let pid = ctrl2.GetProcessId().unwrap_or(0);
+                    if pid != 0 {
+                        pids.insert(pid);
+                    }
+                }
+            }
+        }
+        pids
+    }
+
+    /// Strip a trailing ".exe" (case-insensitive) for a display name fallback.
+    fn pretty_exe_name(exe: &str) -> String {
+        if exe.to_lowercase().ends_with(".exe") {
+            exe[..exe.len() - 4].to_string()
+        } else {
+            exe.to_string()
+        }
+    }
+
+    /// Snapshot running processes; return those that are either a known audio app
+    /// OR currently hold a render audio session (t23). Deduplicated by exe name.
     pub fn detect_audio_processes() -> Result<Vec<AudioProcess>, DetectionError> {
         let snapshot = unsafe {
             CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e| {
@@ -87,6 +179,10 @@ mod platform {
         // Use LinkedHashMap ordering: first-seen PID wins for each exe name.
         let mut seen: std::collections::HashMap<String, AudioProcess> =
             std::collections::HashMap::new();
+
+        // Apps actually using audio right now (catches games / unlisted apps, t23).
+        let audio_pids = audio_session_pids();
+        let own_pid = std::process::id(); // don't list Nodus itself
 
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
@@ -106,15 +202,25 @@ mod platform {
             let key = exe_name.to_lowercase();
 
             if !seen.contains_key(&key) {
-                if let Some((display_name, source_type)) = classify_exe(&exe_name) {
-                    debug!("detected audio process: {exe_name} (pid {})", entry.th32ProcessID);
-                    let pid = entry.th32ProcessID;
+                let known = classify_exe(&exe_name);
+                let pid = entry.th32ProcessID;
+                // Session-based: a real app using audio, but not us and not OS plumbing.
+                let session_ok =
+                    audio_pids.contains(&pid) && pid != own_pid && !is_system_session_exe(&key);
+                // Show if it's a known audio app OR it currently uses audio (t23).
+                if known.is_some() || session_ok {
+                    let (display_name, source_type) = match known {
+                        Some((d, t)) => (d.to_string(), t),
+                        None => (pretty_exe_name(&exe_name), SourceType::Unknown),
+                    };
+                    debug!("detected audio process: {exe_name} (pid {pid}, session={})",
+                        audio_pids.contains(&pid));
                     seen.insert(
                         key,
                         AudioProcess {
                             exe_name: exe_name.clone(),
                             pid,
-                            display_name: display_name.to_string(),
+                            display_name,
                             source_type,
                             icon: crate::detection::icon::icon_data_url(pid, &exe_name),
                         },

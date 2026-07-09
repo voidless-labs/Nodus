@@ -9,7 +9,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
     time::Duration,
@@ -154,6 +154,9 @@ pub mod platform {
         ring_id: u32,
         stop_flag: Arc<AtomicBool>,
         sender: Option<broadcast::Sender<AudioFrame>>,
+        /// RMS level [0,1] (dBFS-scaled) of the last read chunk, for the source
+        /// VU meter (t21). f32 stored as bits; updated on the reader thread.
+        level: Arc<AtomicU32>,
     }
 
     impl VirtualCapture {
@@ -162,11 +165,17 @@ pub mod platform {
                 ring_id,
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 sender: None,
+                level: Arc::new(AtomicU32::new(0)),
             }
         }
 
         pub fn subscribe(&self) -> Option<broadcast::Receiver<AudioFrame>> {
             self.sender.as_ref().map(|s| s.subscribe())
+        }
+
+        /// Current RMS level [0,1] for the VU meter (t21).
+        pub fn current_level(&self) -> f32 {
+            f32::from_bits(self.level.load(Ordering::Relaxed))
         }
 
         /// Start pumping audio frames from the kernel ring into the broadcast channel.
@@ -184,6 +193,7 @@ pub mod platform {
             self.stop_flag.store(false, Ordering::SeqCst);
 
             let stop = Arc::clone(&self.stop_flag);
+            let level = Arc::clone(&self.level);
 
             std::thread::spawn(move || {
                 const FRAMES_PER_CHUNK: usize = 480; // 10 ms at 48 kHz
@@ -195,6 +205,9 @@ pub mod platform {
                 let _timer = crate::audio::session::TimerResolutionGuard::acquire();
 
                 let mut local_read: u64 = view.write_counter();
+                // Chunks arrive in ~10 ms bursts; only a real gap decays the VU,
+                // so it doesn't flicker between reads. (t21)
+                let mut empty_reads: u32 = 0;
 
                 debug!("VirtualCapture: reading from {} ring", render_section_name(ring_id));
 
@@ -213,8 +226,26 @@ pub mod platform {
                         let mut frame = vec![0f32; SAMPLES_PER_CHUNK];
                         view.read_chunk(local_read, &mut frame);
                         local_read += BYTES_PER_CHUNK;
+                        // RMS level for the source VU meter, dBFS [-60,0] → [0,1] —
+                        // raw per chunk, like the real captures; the shared CSS
+                        // meter transition does the visual smoothing (t21).
+                        empty_reads = 0;
+                        let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
+                        let rms = (sum_sq / frame.len() as f32).sqrt();
+                        let db = 20.0 * rms.max(1e-7_f32).log10();
+                        level.store(((db + 60.0) / 60.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
                         let _ = tx.send(frame);
                     } else {
+                        // Only a real gap (>~24 ms) decays the meter, so it stays
+                        // smooth between the ~10 ms chunk reads.
+                        empty_reads += 1;
+                        if empty_reads > 12 {
+                            let prev = f32::from_bits(level.load(Ordering::Relaxed));
+                            level.store(
+                                if prev > 0.001 { (prev * 0.85).to_bits() } else { 0 },
+                                Ordering::Relaxed,
+                            );
+                        }
                         std::thread::sleep(Duration::from_millis(2));
                     }
                 }
@@ -238,6 +269,7 @@ pub mod platform {
     impl VirtualCapture {
         pub fn new(_ring_id: u32) -> Self { Self }
         pub fn subscribe(&self) -> Option<broadcast::Receiver<AudioFrame>> { None }
+        pub fn current_level(&self) -> f32 { 0.0 }
         pub fn start(&mut self) -> Result<broadcast::Receiver<AudioFrame>, SessionError> {
             Err(SessionError::DeviceUnavailable("VirtualCapture not supported on non-Windows".into()))
         }

@@ -293,6 +293,9 @@ pub mod platform {
         /// created virtual mic (its driver device id). (t8)
         ring_id: u32,
         stop_flag: Arc<AtomicBool>,
+        /// Post-volume RMS level [0,1] (dBFS-scaled) fed to the mic, for the
+        /// destination VU meter (t21). f32 as bits; updated on the writer thread.
+        level: Arc<AtomicU32>,
     }
 
     impl VirtualRender {
@@ -301,7 +304,13 @@ pub mod platform {
                 format,
                 ring_id,
                 stop_flag: Arc::new(AtomicBool::new(false)),
+                level: Arc::new(AtomicU32::new(0)),
             }
+        }
+
+        /// Current RMS level [0,1] for the VU meter (t21).
+        pub fn current_level(&self) -> f32 {
+            f32::from_bits(self.level.load(Ordering::Relaxed))
         }
 
         /// Start the writer thread. Section open happens inside the thread:
@@ -318,6 +327,7 @@ pub mod platform {
             let format = self.format;
             let ring_id = self.ring_id;
             let stop = Arc::clone(&self.stop_flag);
+            let level = Arc::clone(&self.level);
             stop.store(false, Ordering::SeqCst);
 
             std::thread::spawn(move || {
@@ -356,6 +366,10 @@ pub mod platform {
                 let mut written: u64 = base + LEAD_BYTES;
                 view.publish(written);
                 let mut overrun_noted = false;
+                // Frames arrive in ~10 ms packets; the Empty poll fires many times
+                // between them. Decaying every poll makes the VU flicker — only
+                // decay after a real gap (no frames for a while). (t21)
+                let mut empty_polls: u32 = 0;
 
                 debug!(
                     "VirtualRender: writing to {} from counter {base} \
@@ -373,6 +387,17 @@ pub mod platform {
                             let pan_v = f32::from_bits(pan.load(Ordering::Relaxed));
 
                             apply_route_dsp(&mut frame, format.channels, is_muted, vol, pan_v);
+
+                            // Post-volume RMS for the mic's VU meter, dBFS [-60,0]
+                            // → [0,1] (t21) — raw per packet, exactly like the real
+                            // captures/renderers; the shared CSS `transition: width
+                            // 90ms` on .node-meter-fill does the visual smoothing.
+                            empty_polls = 0;
+                            let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
+                            let rms = (sum_sq / frame.len().max(1) as f32).sqrt();
+                            let db = 20.0 * rms.max(1e-7_f32).log10();
+                            level.store(((db + 60.0) / 60.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+
                             let bytes = frame_to_ring_bytes(&frame, &format);
 
                             // Lapping the driver's reader is expected whenever no app
@@ -392,6 +417,17 @@ pub mod platform {
                             view.publish(written);
                         }
                         Err(broadcast::error::TryRecvError::Empty) => {
+                            // Only a REAL gap (no frames for >~25 ms, i.e. past the
+                            // normal ~10 ms packet spacing) decays the meter — this
+                            // keeps it smooth during playback instead of flickering.
+                            empty_polls += 1;
+                            if empty_polls > 25 {
+                                let prev = f32::from_bits(level.load(Ordering::Relaxed));
+                                level.store(
+                                    if prev > 0.001 { (prev * 0.85).to_bits() } else { 0 },
+                                    Ordering::Relaxed,
+                                );
+                            }
                             std::thread::sleep(Duration::from_millis(1));
                         }
                         Err(broadcast::error::TryRecvError::Lagged(n)) => {
@@ -432,6 +468,7 @@ pub mod platform {
             _pan: Arc<AtomicU32>,
         ) {
         }
+        pub fn current_level(&self) -> f32 { 0.0 }
         pub fn stop(&self) {}
     }
 }

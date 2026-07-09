@@ -53,12 +53,12 @@ impl CaptureSource {
         }
     }
 
-    /// Current RMS level for VU metering. VirtualCapture has no meter yet → 0.0.
+    /// Current RMS level [0,1] for VU metering (t21: virtual sources metered too).
     fn current_level(&self) -> f32 {
         match self {
             CaptureSource::Loopback(c) => c.current_level(),
             CaptureSource::ProcessLoopback(c) => c.current_level(),
-            CaptureSource::Virtual(_) => 0.0,
+            CaptureSource::Virtual(c) => c.current_level(),
         }
     }
 
@@ -107,12 +107,12 @@ impl RouteSink {
         }
     }
 
-    /// Post-volume output level [0,1] of this sink (for the destination VU meter).
-    /// VirtualMic has no meter yet → 0.
+    /// Post-volume output level [0,1] of this sink (for the destination VU meter,
+    /// t21: the virtual mic is metered too).
     fn current_level(&self) -> f32 {
         match self {
             RouteSink::Wasapi(r) => r.current_level(),
-            RouteSink::VirtualMic(_) => 0.0,
+            RouteSink::VirtualMic(v) => v.current_level(),
         }
     }
 }
