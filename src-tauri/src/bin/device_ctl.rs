@@ -11,7 +11,7 @@
 
 #[cfg(target_os = "windows")]
 fn main() {
-    use nodus::audio::device_control::{
+    use nodus::virtual_audio::device_control::{
         open_control, ControlError, DeviceControl, DeviceKind, CTL_VERSION,
     };
 

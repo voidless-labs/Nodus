@@ -52,7 +52,7 @@ fn main() {
 
     let source = outputs
         .iter()
-        .find(|d| nodus::audio::virtual_device::is_nodus_virtual_name(&d.name));
+        .find(|d| nodus::virtual_audio::virtual_device::is_nodus_virtual_name(&d.name));
     let source = match source {
         Some(s) => *s,
         None => {
@@ -75,7 +75,7 @@ fn main() {
         None => {
             match outputs
                 .iter()
-                .find(|d| !nodus::audio::virtual_device::is_nodus_virtual_name(&d.name))
+                .find(|d| !nodus::virtual_audio::virtual_device::is_nodus_virtual_name(&d.name))
             {
                 Some(d) => *d,
                 None => {

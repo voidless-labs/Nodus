@@ -291,7 +291,7 @@ impl Graph {
                     continue;
                 }
                 let is_virtual =
-                    crate::audio::virtual_device::is_nodus_virtual_name(&node.label);
+                    crate::virtual_audio::virtual_device::is_nodus_virtual_name(&node.label);
                 self.collect_device_routes(
                     &node.id,
                     &node.device_id,
@@ -342,7 +342,7 @@ impl Graph {
                                 from_is_virtual: source_is_virtual,
                                 to_device_id: dest.device_id.clone(),
                                 to_is_virtual_mic:
-                                    crate::audio::virtual_device::is_nodus_virtual_mic_name(
+                                    crate::virtual_audio::virtual_device::is_nodus_virtual_mic_name(
                                         &dest.label,
                                     ),
                                 volume,

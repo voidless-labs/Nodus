@@ -13,9 +13,11 @@ use tracing::{error, info, warn};
 use crate::{
     audio::{
         devices::{enumerate_audio_devices, AudioDevice},
-        virtual_device::{get_virtual_setup, query_virtual_status, VirtualSetupStatus},
         wasapi::ComGuard,
+    },
+    virtual_audio::{
         device_control::{open_control, DeviceKind, VirtualDeviceInfo},
+        virtual_device::{get_virtual_setup, query_virtual_status, VirtualSetupStatus},
     },
     detection::process::{detect_audio_processes, AudioProcess, ProcessDetector},
     routing::{engine::RoutingEngine, graph::RoutingGraph, node::RouteId},
@@ -30,9 +32,9 @@ pub struct EngineState(pub Arc<RoutingEngine>);
 pub struct DetectorState(pub Mutex<ProcessDetector>);
 /// The shared workspace document (scenes) — single source of truth for both UIs
 /// (t17 phase B). Same Arc the daemon's /rpc dispatcher uses.
-pub struct SceneState(pub Arc<crate::server::scene_store::SceneStore>);
+pub struct SceneState(pub Arc<crate::daemon::scene_store::SceneStore>);
 /// Shared application settings (t14) — mirrored + persisted like the scene.
-pub struct SettingsState(pub Arc<crate::server::settings_store::SettingsStore>);
+pub struct SettingsState(pub Arc<crate::daemon::settings_store::SettingsStore>);
 
 // ── Device commands ────────────────────────────────────────────────────────
 
@@ -82,14 +84,14 @@ pub async fn get_virtual_setup_status() -> Result<VirtualSetupStatus, String> {
 /// Poll `get_virtual_setup_status` afterward to confirm success.
 #[tauri::command]
 pub async fn install_vbcable() -> Result<(), String> {
-    crate::audio::virtual_device::setup::install_vbcable().await
+    crate::virtual_audio::virtual_device::setup::install_vbcable().await
 }
 
 /// Return whether Windows test signing mode is currently enabled.
 /// Used by onboarding UI to show Test Mode option state.
 #[tauri::command]
 pub async fn is_test_signing_enabled() -> Result<bool, String> {
-    Ok(crate::audio::virtual_device::setup::is_test_signing_enabled())
+    Ok(crate::virtual_audio::virtual_device::setup::is_test_signing_enabled())
 }
 
 // ── Process commands ───────────────────────────────────────────────────────
@@ -211,7 +213,7 @@ pub async fn create_virtual_device(kind: String, name: String) -> Result<Virtual
         {
             let _com = ComGuard::init();
             let is_capture = matches!(k, DeviceKind::Capture);
-            match crate::audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
+            match crate::virtual_audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
                 Ok(eid) => info!("named virtual endpoint {eid} (ring {id}) = '{name}'"),
                 Err(e) => warn!("virtual endpoint name skipped: {e}"),
             }
@@ -242,7 +244,7 @@ pub async fn rename_virtual_device(id: u32, kind: String, name: String) -> Resul
         {
             let _com = ComGuard::init();
             let is_capture = matches!(k, DeviceKind::Capture);
-            match crate::audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
+            match crate::virtual_audio::endpoint_name::set_name_for_ring(id, is_capture, &name) {
                 Ok(eid) => info!("renamed virtual endpoint {eid} (ring {id}) = '{name}'"),
                 Err(e) => warn!("virtual endpoint rename skipped: {e}"),
             }
@@ -273,7 +275,7 @@ pub fn reassert_virtual_names() {
         };
         for dev in devices.into_iter().filter(|d| !d.is_static) {
             let is_capture = matches!(dev.kind, DeviceKind::Capture);
-            match crate::audio::endpoint_name::set_name_for_ring(dev.id, is_capture, &dev.name) {
+            match crate::virtual_audio::endpoint_name::set_name_for_ring(dev.id, is_capture, &dev.name) {
                 Ok(eid) => info!("re-assert endpoint {eid} (ring {}) = '{}'", dev.id, dev.name),
                 Err(e) => warn!("re-assert ring {}: {e}", dev.id),
             }
@@ -298,7 +300,7 @@ pub async fn remove_virtual_device(id: u32) -> Result<(), String> {
 #[tauri::command]
 pub fn get_scene(
     scene: State<'_, SceneState>,
-) -> crate::server::scene_store::SceneSnapshot {
+) -> crate::daemon::scene_store::SceneSnapshot {
     scene.0.snapshot()
 }
 
@@ -320,7 +322,7 @@ pub fn push_scene(
 #[tauri::command]
 pub fn get_settings(
     settings: State<'_, SettingsState>,
-) -> crate::server::settings_store::Settings {
+) -> crate::daemon::settings_store::Settings {
     settings.0.get()
 }
 
@@ -328,9 +330,9 @@ pub fn get_settings(
 /// other UIs and applies side effects (e.g. Windows autostart). Returns normalised.
 #[tauri::command]
 pub fn set_settings(
-    next: crate::server::settings_store::Settings,
+    next: crate::daemon::settings_store::Settings,
     settings: State<'_, SettingsState>,
-) -> crate::server::settings_store::Settings {
+) -> crate::daemon::settings_store::Settings {
     settings.0.set(next)
 }
 
@@ -344,8 +346,8 @@ pub fn set_settings(
 /// (Phase B), so a scene change from a web client reaches the desktop too.
 pub fn setup_background_tasks(
     handle: AppHandle,
-    bus: crate::server::EventBus,
-    settings: Arc<crate::server::settings_store::SettingsStore>,
+    bus: crate::daemon::EventBus,
+    settings: Arc<crate::daemon::settings_store::SettingsStore>,
 ) {
     // Process detector — publishes "process-changed" when the list changes. Interval
     // comes from settings (applied at launch). The ProcessDetector's background thread
@@ -356,7 +358,7 @@ pub fn setup_background_tasks(
         detector.start(settings.get().scan_interval(), move |procs| {
             match serde_json::to_value(&procs) {
                 Ok(payload) => {
-                    let _ = bus_proc.send(crate::server::ServerEvent {
+                    let _ = bus_proc.send(crate::daemon::ServerEvent {
                         event: "process-changed".into(),
                         payload,
                     });
@@ -375,7 +377,7 @@ pub fn setup_background_tasks(
         match list_devices_full() {
             Ok(devices) => {
                 if let Ok(payload) = serde_json::to_value(&devices) {
-                    let _ = bus_dev.send(crate::server::ServerEvent {
+                    let _ = bus_dev.send(crate::daemon::ServerEvent {
                         event: "audio-devices-changed".into(),
                         payload,
                     });
@@ -401,8 +403,8 @@ pub fn setup_background_tasks(
     std::thread::spawn(move || {
         let mut prev: std::collections::HashMap<String, f32> = Default::default();
         let mut was_running = false;
-        let publish = |payload: serde_json::Value, bus: &crate::server::EventBus| {
-            let _ = bus.send(crate::server::ServerEvent {
+        let publish = |payload: serde_json::Value, bus: &crate::daemon::EventBus| {
+            let _ = bus.send(crate::daemon::ServerEvent {
                 event: "volume-levels".into(),
                 payload,
             });
@@ -420,7 +422,7 @@ pub fn setup_background_tasks(
             // is the source of truth, not any one UI's local flag (t17).
             if running != was_running {
                 was_running = running;
-                let _ = bus_levels.send(crate::server::ServerEvent {
+                let _ = bus_levels.send(crate::daemon::ServerEvent {
                     event: "engine-state".into(),
                     payload: serde_json::json!(running),
                 });

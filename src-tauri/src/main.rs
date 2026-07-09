@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use nodus::commands::bridge::{DetectorState, EngineState, SettingsState};
+use nodus::bridge::{DetectorState, EngineState, SettingsState};
 use nodus::detection::process::ProcessDetector;
 use nodus::routing::engine::RoutingEngine;
 use tauri::{
@@ -79,7 +79,7 @@ fn show_main_window(app: tauri::AppHandle) {
 
 /// UI → Rust: the daemon URL + token to paste into a browser / hand to preview (t17).
 #[tauri::command]
-fn get_server_info(info: tauri::State<'_, nodus::server::ServerInfo>) -> nodus::server::ServerInfo {
+fn get_server_info(info: tauri::State<'_, nodus::daemon::ServerInfo>) -> nodus::daemon::ServerInfo {
     info.inner().clone()
 }
 
@@ -136,29 +136,29 @@ fn main() {
         .manage(EngineState(Arc::new(RoutingEngine::new())))
         .manage(DetectorState(Mutex::new(ProcessDetector::new())))
         .invoke_handler(tauri::generate_handler![
-            nodus::commands::bridge::get_audio_devices,
-            nodus::commands::bridge::get_running_audio_processes,
-            nodus::commands::bridge::apply_routing_graph,
-            nodus::commands::bridge::set_route_mute,
-            nodus::commands::bridge::set_route_volume,
-            nodus::commands::bridge::set_route_pan,
-            nodus::commands::bridge::start_engine,
-            nodus::commands::bridge::stop_engine,
-            nodus::commands::bridge::get_virtual_setup_status,
-            nodus::commands::bridge::install_vbcable,
-            nodus::commands::bridge::is_test_signing_enabled,
+            nodus::bridge::get_audio_devices,
+            nodus::bridge::get_running_audio_processes,
+            nodus::bridge::apply_routing_graph,
+            nodus::bridge::set_route_mute,
+            nodus::bridge::set_route_volume,
+            nodus::bridge::set_route_pan,
+            nodus::bridge::start_engine,
+            nodus::bridge::stop_engine,
+            nodus::bridge::get_virtual_setup_status,
+            nodus::bridge::install_vbcable,
+            nodus::bridge::is_test_signing_enabled,
             set_flyout_pinned,
             show_main_window,
             get_server_info,
-            nodus::commands::bridge::get_scene,
-            nodus::commands::bridge::push_scene,
-            nodus::commands::bridge::is_engine_running,
-            nodus::commands::bridge::get_settings,
-            nodus::commands::bridge::set_settings,
-            nodus::commands::bridge::list_virtual_devices,
-            nodus::commands::bridge::create_virtual_device,
-            nodus::commands::bridge::remove_virtual_device,
-            nodus::commands::bridge::rename_virtual_device,
+            nodus::bridge::get_scene,
+            nodus::bridge::push_scene,
+            nodus::bridge::is_engine_running,
+            nodus::bridge::get_settings,
+            nodus::bridge::set_settings,
+            nodus::bridge::list_virtual_devices,
+            nodus::bridge::create_virtual_device,
+            nodus::bridge::remove_virtual_device,
+            nodus::bridge::rename_virtual_device,
         ])
         .system_tray(build_tray())
         .on_system_tray_event(|app, event| match event {
@@ -239,7 +239,7 @@ fn main() {
 
             // Daemon event bus (t17): one producer (the background tasks), many
             // consumers (the desktop webview via emit_all + each WS client).
-            let (bus, _rx) = tokio::sync::broadcast::channel::<nodus::server::ServerEvent>(128);
+            let (bus, _rx) = tokio::sync::broadcast::channel::<nodus::daemon::ServerEvent>(128);
 
             // Forwarder: mirror every bus event to the desktop webview via emit_all.
             // The other consumer is each WS connection. This single path also carries
@@ -258,14 +258,14 @@ fn main() {
             // the Tauri commands and the daemon. Settings is created first so the
             // background tasks + server bind can read it.
             let config_dir = app.path_resolver().app_config_dir();
-            let settings = std::sync::Arc::new(nodus::server::settings_store::SettingsStore::new(
+            let settings = std::sync::Arc::new(nodus::daemon::settings_store::SettingsStore::new(
                 config_dir.as_ref().map(|d| d.join("settings.json")),
                 bus.clone(),
             ));
-            app.manage(nodus::commands::bridge::SettingsState(settings.clone()));
+            app.manage(nodus::bridge::SettingsState(settings.clone()));
             let cfg = settings.get();
 
-            nodus::commands::bridge::setup_background_tasks(
+            nodus::bridge::setup_background_tasks(
                 handle.clone(),
                 bus.clone(),
                 settings.clone(),
@@ -291,18 +291,18 @@ fn main() {
             } else {
                 info!("Nodus daemon: {url}  token: {token}");
             }
-            app.manage(nodus::server::ServerInfo {
+            app.manage(nodus::daemon::ServerInfo {
                 url: url.clone(),
                 token: token.clone(),
             });
 
-            let scene = std::sync::Arc::new(nodus::server::scene_store::SceneStore::new(
+            let scene = std::sync::Arc::new(nodus::daemon::scene_store::SceneStore::new(
                 config_dir.as_ref().map(|d| d.join("workspace.json")),
                 bus.clone(),
             ));
-            app.manage(nodus::commands::bridge::SceneState(scene.clone()));
+            app.manage(nodus::bridge::SceneState(scene.clone()));
 
-            let state = nodus::server::ServerState {
+            let state = nodus::daemon::ServerState {
                 engine,
                 scene,
                 settings,
@@ -315,7 +315,7 @@ fn main() {
                 std::net::Ipv4Addr::LOCALHOST.into()
             };
             let addr = std::net::SocketAddr::new(ip, port);
-            tauri::async_runtime::spawn(nodus::server::serve(state, addr));
+            tauri::async_runtime::spawn(nodus::daemon::serve(state, addr));
 
             Ok(())
         })

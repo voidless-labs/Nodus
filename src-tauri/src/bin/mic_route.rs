@@ -19,9 +19,9 @@ fn main() {
     use nodus::{
         audio::{
             devices::{enumerate_audio_devices, DeviceType},
-            virtual_device::{is_nodus_virtual_mic_name, is_nodus_virtual_name},
             wasapi::ComGuard,
         },
+        virtual_audio::virtual_device::{is_nodus_virtual_mic_name, is_nodus_virtual_name},
         routing::{
             engine::RoutingEngine,
             graph::RoutingGraph,

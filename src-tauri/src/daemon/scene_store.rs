@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::error;
 
-use crate::server::{EventBus, ServerEvent};
+use crate::daemon::{EventBus, ServerEvent};
 
 /// What clients receive: the document, its revision, and (on a broadcast) which
 /// client caused it, so that client can ignore its own echo.

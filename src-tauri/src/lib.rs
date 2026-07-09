@@ -1,6 +1,7 @@
 // Re-export all internal modules for integration test binaries and future UI bridge.
 pub mod audio;
-pub mod commands;
+pub mod bridge;
+pub mod daemon;
 pub mod detection;
 pub mod routing;
-pub mod server;
+pub mod virtual_audio;

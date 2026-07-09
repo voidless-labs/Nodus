@@ -18,7 +18,7 @@ use std::{
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use super::session::{AudioFrame, SessionError, CHANNEL_CAPACITY};
+use crate::audio::session::{AudioFrame, SessionError, CHANNEL_CAPACITY};
 
 // ── Windows-only implementation ──────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ use super::session::{AudioFrame, SessionError, CHANNEL_CAPACITY};
 pub mod platform {
     use super::*;
     // Shared contract mirror (header layout + constants) — see ring_layout.rs.
-    use crate::audio::ring_layout::{
+    use crate::virtual_audio::ring_layout::{
         render_section_name, RingHeader, RING_BYTES, RING_MAGIC, RING_VERSION,
     };
     use windows::{

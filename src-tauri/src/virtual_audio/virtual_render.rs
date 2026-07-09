@@ -44,8 +44,8 @@ use std::sync::{
 
 use tokio::sync::broadcast;
 
-use super::session::AudioFrame;
-use super::wasapi::AudioFormat;
+use crate::audio::session::AudioFrame;
+use crate::audio::wasapi::AudioFormat;
 
 /// Fixed sample rate of the mic ring (see ring_layout.rs / common.h).
 const RING_SAMPLE_RATE: u32 = 48_000;
@@ -157,7 +157,7 @@ pub mod platform {
 
     use tracing::{debug, warn};
 
-    use crate::audio::ring_layout::{
+    use crate::virtual_audio::ring_layout::{
         mic_section_name, RingHeader, RING_BYTES, RING_MAGIC, RING_VERSION,
     };
     use windows::{

@@ -1,7 +1,7 @@
 //! `/rpc` command dispatcher (t17 phase A).
 //!
 //! Maps a `{cmd, args}` request onto the SAME engine operations the Tauri
-//! commands in `commands/bridge.rs` use — no duplicated business logic, just a
+//! commands in `bridge.rs` use — no duplicated business logic, just a
 //! second transport. Arg keys mirror the JS bridge: Tauri 1.x converts camelCase
 //! invoke args to snake_case, so the bridge sends e.g. `routeId`; here we accept
 //! both `routeId` and `route_id` for parity.
@@ -9,13 +9,12 @@
 use serde_json::Value;
 
 use crate::{
-    audio::{
-        devices::enumerate_audio_devices, virtual_device::get_virtual_setup, wasapi::ComGuard,
-    },
-    commands::bridge::list_devices_full,
+    audio::{devices::enumerate_audio_devices, wasapi::ComGuard},
+    virtual_audio::virtual_device::get_virtual_setup,
+    bridge::list_devices_full,
     detection::process::detect_audio_processes,
     routing::graph::RoutingGraph,
-    server::{RpcRequest, ServerState},
+    daemon::{RpcRequest, ServerState},
 };
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -68,7 +67,7 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
             to_value(status)
         }
         "is_test_signing_enabled" => {
-            to_value(crate::audio::virtual_device::setup::is_test_signing_enabled())
+            to_value(crate::virtual_audio::virtual_device::setup::is_test_signing_enabled())
         }
 
         // ── Scene sync (phase B) ───────────────────────────────────────────
@@ -113,7 +112,7 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
         // ── Virtual devices (t5 step 3, S3.5) ──────────────────────────────
         "list_virtual_devices" => {
             let list = tokio::task::spawn_blocking(|| {
-                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                let ctl = crate::virtual_audio::device_control::open_control().map_err(|e| e.to_string())?;
                 ctl.list_devices().map_err(|e| e.to_string())
             })
             .await
@@ -124,14 +123,14 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
             let kind = arg_str(args, "kind").ok_or("missing kind")?;
             let name = arg_str(args, "name").ok_or("missing name")?;
             let k = match kind.as_str() {
-                "render" => crate::audio::device_control::DeviceKind::Render,
-                "capture" => crate::audio::device_control::DeviceKind::Capture,
+                "render" => crate::virtual_audio::device_control::DeviceKind::Render,
+                "capture" => crate::virtual_audio::device_control::DeviceKind::Capture,
                 other => return Err(format!("unknown kind '{other}'")),
             };
             let info = tokio::task::spawn_blocking(move || -> Result<_, String> {
-                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                let ctl = crate::virtual_audio::device_control::open_control().map_err(|e| e.to_string())?;
                 let id = ctl.create_device(k, None, &name).map_err(|e| e.to_string())?;
-                Ok(crate::audio::device_control::VirtualDeviceInfo {
+                Ok(crate::virtual_audio::device_control::VirtualDeviceInfo {
                     id, kind: k, name, is_static: false, ring_active: false,
                 })
             })
@@ -142,7 +141,7 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
         "remove_virtual_device" => {
             let id = args.get("id").and_then(|v| v.as_u64()).ok_or("missing id")? as u32;
             tokio::task::spawn_blocking(move || {
-                let ctl = crate::audio::device_control::open_control().map_err(|e| e.to_string())?;
+                let ctl = crate::virtual_audio::device_control::open_control().map_err(|e| e.to_string())?;
                 ctl.destroy_device(id).map_err(|e| e.to_string())
             })
             .await
@@ -155,7 +154,7 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
         "set_settings" => {
             // bridge sends { next: {...} } (Tauri command convention); tolerate a bare object too.
             let raw = args.get("next").cloned().unwrap_or_else(|| args.clone());
-            let next: crate::server::settings_store::Settings =
+            let next: crate::daemon::settings_store::Settings =
                 serde_json::from_value(raw).map_err(|e| e.to_string())?;
             to_value(state.settings.set(next))
         }
@@ -187,15 +186,15 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{EventBus, ServerState};
+    use crate::daemon::{EventBus, ServerState};
     use std::sync::Arc;
 
     fn test_state() -> ServerState {
         let (bus, _rx): (EventBus, _) = tokio::sync::broadcast::channel(8);
         ServerState {
             engine: Arc::new(crate::routing::engine::RoutingEngine::new()),
-            scene: Arc::new(crate::server::scene_store::SceneStore::new(None, bus.clone())),
-            settings: Arc::new(crate::server::settings_store::SettingsStore::new(None, bus.clone())),
+            scene: Arc::new(crate::daemon::scene_store::SceneStore::new(None, bus.clone())),
+            settings: Arc::new(crate::daemon::settings_store::SettingsStore::new(None, bus.clone())),
             bus,
             token: String::new(),
         }

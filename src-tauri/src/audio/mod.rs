@@ -1,10 +1,6 @@
-pub mod device_control;
+//! Real Windows audio via WASAPI: COM setup, device enumeration, and the
+//! capture/render sessions. (Nodus's own virtual devices live in `virtual_audio`.)
+
 pub mod devices;
-#[cfg(target_os = "windows")]
-pub mod endpoint_name;
-pub(crate) mod ring_layout;
 pub mod session;
-pub mod virtual_capture;
-pub mod virtual_device;
-pub mod virtual_render;
 pub mod wasapi;

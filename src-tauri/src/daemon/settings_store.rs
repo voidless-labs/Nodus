@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::server::{EventBus, ServerEvent};
+use crate::daemon::{EventBus, ServerEvent};
 
 /// All persisted application settings. `#[serde(default)]` so older files / partial
 /// payloads fill missing fields from defaults rather than failing to load.

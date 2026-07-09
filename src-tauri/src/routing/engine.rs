@@ -27,10 +27,9 @@ use crate::audio::{
         clamp_volume, find_audio_pid_for_exe, get_device_capture_format, volume_to_atomic,
         AudioFrame, AudioRenderer, LoopbackCapture, ProcessLoopbackCapture, SessionError,
     },
-    virtual_capture::VirtualCapture,
-    virtual_render::VirtualRender,
     wasapi::AudioFormat,
 };
+use crate::virtual_audio::{virtual_capture::VirtualCapture, virtual_render::VirtualRender};
 use tokio::sync::broadcast;
 
 /// A capture source feeding one source's broadcast channel:
@@ -426,7 +425,7 @@ impl RoutingEngine {
                 Backend::Virtual => {
                     // Read the driver render ring for this source's device: `nodus:<N>`
                     // → dynamic virtual output N, else the static speaker (ring 0). (t8)
-                    let ring_id = crate::audio::virtual_device::ring_id_from_device_id(
+                    let ring_id = crate::virtual_audio::virtual_device::ring_id_from_device_id(
                         &ar.from_device_id,
                     );
                     (CaptureSource::Virtual(VirtualCapture::new(ring_id)), self.format)
@@ -507,7 +506,7 @@ impl RoutingEngine {
             // destination device id: `nodus:<N>` → dynamic mic N, else the static
             // mic 0 — so distinct virtual mics carry independent audio. (t8)
             let ring_id =
-                crate::audio::virtual_device::ring_id_from_device_id(&ar.to_device_id);
+                crate::virtual_audio::virtual_device::ring_id_from_device_id(&ar.to_device_id);
             let vr = VirtualRender::new(capture_format, ring_id);
             vr.start(
                 receiver,

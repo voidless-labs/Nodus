@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::devices::{AudioDevice, DeviceType};
+use crate::audio::devices::{AudioDevice, DeviceType};
 
 // ── Name detection ────────────────────────────────────────────────────────────
 
@@ -172,7 +172,7 @@ pub fn get_virtual_setup(all_devices: &[AudioDevice]) -> VirtualSetupStatus {
 }
 
 // Keep old helper for backward compat
-pub fn query_virtual_status(all_devices: &[AudioDevice]) -> crate::audio::virtual_device::LegacyStatus {
+pub fn query_virtual_status(all_devices: &[AudioDevice]) -> crate::virtual_audio::virtual_device::LegacyStatus {
     let setup = get_virtual_setup(all_devices);
     LegacyStatus {
         available: setup.kind != VirtualSetupKind::NotFound,
