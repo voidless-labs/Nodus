@@ -202,6 +202,100 @@ mod platform {
             Ok(all)
         }
     }
+
+    // ── Live device-change notifications (t19) ─────────────────────────────
+    // Windows tells us when endpoints are added / removed / change state / the
+    // default changes, so the UI device list (and the per-node presence status +
+    // the Add panel) stays live instead of frozen at the startup snapshot.
+
+    #[windows::core::implement(windows::Win32::Media::Audio::IMMNotificationClient)]
+    struct NotificationClient {
+        // Mutex so the COM object is Sync — endpoint callbacks may arrive on any
+        // MTA thread. Sending is cheap; the heavy re-enumeration is off-thread.
+        tx: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+    }
+
+    impl NotificationClient {
+        fn ping(&self) {
+            if let Ok(tx) = self.tx.lock() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    #[allow(non_snake_case)]
+    impl windows::Win32::Media::Audio::IMMNotificationClient_Impl for NotificationClient_Impl {
+        fn OnDeviceStateChanged(
+            &self,
+            _device_id: &windows::core::PCWSTR,
+            _new_state: windows::Win32::Media::Audio::DEVICE_STATE,
+        ) -> windows::core::Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDeviceAdded(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDeviceRemoved(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDefaultDeviceChanged(
+            &self,
+            _flow: windows::Win32::Media::Audio::EDataFlow,
+            _role: windows::Win32::Media::Audio::ERole,
+            _default_device_id: &windows::core::PCWSTR,
+        ) -> windows::core::Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnPropertyValueChanged(
+            &self,
+            _device_id: &windows::core::PCWSTR,
+            _key: &windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY,
+        ) -> windows::core::Result<()> {
+            // Property churn (volume, format, …) is noisy and never adds/removes a
+            // device — ignore it so we don't re-enumerate on every volume tick.
+            Ok(())
+        }
+    }
+
+    /// Register for endpoint notifications and call `on_change` (debounced) whenever
+    /// the set of devices changes. Blocks forever — keeps the COM registration alive,
+    /// so run it on a dedicated thread. (t19)
+    pub fn watch_device_changes(on_change: Box<dyn Fn() + Send>) -> Result<(), DeviceError> {
+        use crate::audio::wasapi::ComGuard;
+        use windows::Win32::Media::Audio::IMMNotificationClient;
+
+        let _com = ComGuard::init().map_err(|e| DeviceError::Enumeration(e.to_string()))?;
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let client: IMMNotificationClient =
+            NotificationClient { tx: std::sync::Mutex::new(tx) }.into();
+
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| DeviceError::Enumeration(e.to_string()))?
+        };
+        unsafe {
+            enumerator
+                .RegisterEndpointNotificationCallback(&client)
+                .map_err(|e| DeviceError::Enumeration(e.to_string()))?;
+        }
+
+        // Coalesce bursts: a single BT reconnect fires added + state + default in a
+        // row — wait a short window and drain, then re-enumerate once.
+        while rx.recv().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            while rx.try_recv().is_ok() {}
+            on_change();
+        }
+
+        unsafe {
+            let _ = enumerator.UnregisterEndpointNotificationCallback(&client);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -218,9 +312,13 @@ mod platform {
             is_virtual: false,
         }])
     }
+
+    pub fn watch_device_changes(_on_change: Box<dyn Fn() + Send>) -> Result<(), DeviceError> {
+        Ok(()) // no endpoint notifications off Windows
+    }
 }
 
-pub use platform::enumerate_audio_devices;
+pub use platform::{enumerate_audio_devices, watch_device_changes};
 
 #[cfg(test)]
 mod tests {

@@ -369,12 +369,11 @@ pub fn setup_background_tasks(
         // detector drops here; background thread is kept alive by its own Arc refs
     }
 
-    // Publish the initial device list on a background thread.
-    let bus_dev = bus.clone();
-    std::thread::spawn(move || {
-        // Use the shared helper so the startup event carries the same Virtual
-        // upgrades as get_audio_devices / the /rpc dispatcher.
-        match list_devices_full() {
+    // Enumerate + broadcast the current device list. Uses the shared helper so the
+    // event carries the same Virtual upgrades as get_audio_devices / the /rpc path.
+    let emit_devices = {
+        let bus_dev = bus.clone();
+        move || match list_devices_full() {
             Ok(devices) => {
                 if let Ok(payload) = serde_json::to_value(&devices) {
                     let _ = bus_dev.send(crate::daemon::ServerEvent {
@@ -383,7 +382,21 @@ pub fn setup_background_tasks(
                     });
                 }
             }
-            Err(e) => error!("failed to enumerate devices on startup: {e}"),
+            Err(e) => error!("failed to enumerate devices: {e}"),
+        }
+    };
+
+    // Publish the initial list, then keep it live: Windows endpoint notifications
+    // (BT plug/unplug, add/remove, default change) re-enumerate and re-broadcast, so
+    // the UI device list — and the per-node presence status + Add panel — stay live
+    // instead of frozen at the startup snapshot. The watcher blocks, keeping the COM
+    // registration alive; the initial emit runs first on the same thread. (t19)
+    std::thread::spawn(move || {
+        emit_devices();
+        if let Err(e) =
+            crate::audio::devices::watch_device_changes(Box::new(emit_devices))
+        {
+            error!("device change watcher failed to start: {e}");
         }
     });
 
