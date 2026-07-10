@@ -1007,10 +1007,14 @@ pub mod platform {
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
 
+        // Announce an outage ONCE, not on every 400ms retry (a device with many
+        // routes has one render thread each — all retry together and would spam).
+        let mut announced = false;
         loop {
             if stop_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
+            let started = std::time::Instant::now();
             match render_session(
                 &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic, &level,
             ) {
@@ -1019,7 +1023,15 @@ pub mod platform {
                     if stop_flag.load(Ordering::SeqCst) {
                         return Ok(());
                     }
-                    warn!("render on {device_id} interrupted ({e}); reconnecting…");
+                    // Ran a while then failed = a fresh outage (re-announce); a quick
+                    // failure = the device is still gone (quiet retry).
+                    if started.elapsed() > Duration::from_secs(2) {
+                        announced = false;
+                    }
+                    if !announced {
+                        warn!("render on {device_id} interrupted ({e}); reconnecting…");
+                        announced = true;
+                    }
                     level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
                     // The device (e.g. BT) may need a moment to reappear as ACTIVE.
                     std::thread::sleep(Duration::from_millis(400));
