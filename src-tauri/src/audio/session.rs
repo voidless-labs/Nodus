@@ -923,6 +923,9 @@ pub mod platform {
         stop_flag: Arc<AtomicBool>,
         /// Post-volume RMS of the rendered stream, dBFS-scaled [0,1] (output VU, t16).
         level: Arc<std::sync::atomic::AtomicU32>,
+        /// LINK_ONLINE / LINK_RECONNECTING / LINK_OFFLINE — the link health of this
+        /// route's destination, for the per-node UI status dot (t19).
+        link: Arc<std::sync::atomic::AtomicU8>,
     }
 
     impl AudioRenderer {
@@ -932,6 +935,9 @@ pub mod platform {
                 format,
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                // Until the first successful open it's "not there yet"; a present
+                // device flips to online within a few ms of the thread starting.
+                link: Arc::new(std::sync::atomic::AtomicU8::new(LINK_OFFLINE)),
             }
         }
 
@@ -939,6 +945,11 @@ pub mod platform {
         /// destination (the engine aggregates per output device).
         pub fn current_level(&self) -> f32 {
             f32::from_bits(self.level.load(Ordering::Relaxed))
+        }
+
+        /// Current link state (LINK_* code) of this route's destination.
+        pub fn link_state(&self) -> u8 {
+            self.link.load(Ordering::Relaxed)
         }
 
         /// Start rendering frames from `source`. `volume` and `muted` are applied per-sample.
@@ -953,11 +964,12 @@ pub mod platform {
             let format = self.format;
             let stop_flag = Arc::clone(&self.stop_flag);
             let level = Arc::clone(&self.level);
+            let link = Arc::clone(&self.link);
 
             std::thread::spawn(move || {
-                if let Err(e) =
-                    run_render(device_id, format, stop_flag, &mut source, volume, muted, pan, level)
-                {
+                if let Err(e) = run_render(
+                    device_id, format, stop_flag, &mut source, volume, muted, pan, level, link,
+                ) {
                     error!("audio render error: {e}");
                 }
             });
@@ -990,13 +1002,29 @@ pub mod platform {
     /// the case and put in the ear can take several seconds to re-appear as ACTIVE.
     const RECONNECT_GRACE: Duration = Duration::from_secs(15);
 
-    /// Link state of a render target, as reported to the log (and, later, the UI).
+    // Wire codes for a render target's link state, shared via an AtomicU8 and
+    // surfaced to the UI (a per-output-node status dot). Kept in sync with the
+    // frontend's LinkState mapping.
+    pub const LINK_ONLINE: u8 = 0;
+    pub const LINK_RECONNECTING: u8 = 1;
+    pub const LINK_OFFLINE: u8 = 2;
+
+    /// Link state of a render target, as reported to the log and the UI.
     #[derive(Clone, Copy, PartialEq)]
     enum LinkPhase {
         /// Was playing, just dropped — actively retrying to re-open.
         Reconnecting,
         /// Never came online, or reconnect gave up — the device just isn't there.
         Offline,
+    }
+
+    impl LinkPhase {
+        fn code(self) -> u8 {
+            match self {
+                LinkPhase::Reconnecting => LINK_RECONNECTING,
+                LinkPhase::Offline => LINK_OFFLINE,
+            }
+        }
     }
 
     /// Self-healing render: a Bluetooth sink (or any output) can vanish and come
@@ -1014,6 +1042,7 @@ pub mod platform {
         muted: Arc<AtomicBool>,
         pan_atomic: Arc<std::sync::atomic::AtomicU32>,
         level: Arc<std::sync::atomic::AtomicU32>,
+        link: Arc<std::sync::atomic::AtomicU8>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
@@ -1035,7 +1064,7 @@ pub mod platform {
             let ran = std::time::Instant::now();
             match render_session(
                 &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic,
-                &level, &opened,
+                &level, &opened, &link,
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_recoverable(&e) => {
@@ -1079,6 +1108,10 @@ pub mod platform {
                         }
                         phase = Some(want);
                     }
+                    // Reflect the current down-state to the UI on every error, not
+                    // just on log transitions (a flapping reconnect must not stay
+                    // stuck showing "online" from the last successful open).
+                    link.store(want.code(), Ordering::Relaxed);
                     // The device (e.g. BT) may need a moment to reappear as ACTIVE.
                     std::thread::sleep(Duration::from_millis(400));
                     continue;
@@ -1102,6 +1135,8 @@ pub mod platform {
         // Set true once the stream actually starts — lets the caller tell a real
         // dropout (was playing) from a device that never came online (in-case).
         opened: &AtomicBool,
+        // Flipped to LINK_ONLINE once the stream is live (UI status dot).
+        link: &std::sync::atomic::AtomicU8,
     ) -> Result<(), SessionError> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
@@ -1160,6 +1195,7 @@ pub mod platform {
                 .map_err(|e| SessionError::Wasapi(WasapiError::AudioClient(e.to_string())))?;
 
             opened.store(true, Ordering::Relaxed);
+            link.store(LINK_ONLINE, Ordering::Relaxed);
             debug!("render started on device {device_id}");
 
             // When the last frame arrived — the VU decays only after a real silence
@@ -1344,6 +1380,10 @@ pub mod platform {
         pub fn stop(&self) {}
     }
 
+    pub const LINK_ONLINE: u8 = 0;
+    pub const LINK_RECONNECTING: u8 = 1;
+    pub const LINK_OFFLINE: u8 = 2;
+
     pub struct AudioRenderer {
         pub device_id: String,
     }
@@ -1354,6 +1394,8 @@ pub mod platform {
         }
 
         pub fn current_level(&self) -> f32 { 0.0 }
+
+        pub fn link_state(&self) -> u8 { LINK_ONLINE }
 
         pub fn start(
             &self,
@@ -1370,7 +1412,8 @@ pub mod platform {
 
 pub use platform::{
     find_audio_pid_for_exe, find_device_for_exe, get_device_capture_format, AppSessionControl,
-    AudioRenderer, LoopbackCapture, ProcessLoopbackCapture,
+    AudioRenderer, LoopbackCapture, ProcessLoopbackCapture, LINK_OFFLINE, LINK_ONLINE,
+    LINK_RECONNECTING,
 };
 
 /// Convert f32 volume [0.0 .. 1.0] to AtomicU32 for lock-free sharing.

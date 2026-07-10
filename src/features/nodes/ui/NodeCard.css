@@ -41,6 +41,41 @@
   background: var(--color-accent-soft);
 }
 
+/* ── Link status chip (t19): output device dropped / reconnecting / offline ── */
+.node-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.node-link::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.node-link--reconnecting {
+  color: #e0a53b;
+  background: color-mix(in srgb, #e0a53b 16%, transparent);
+}
+.node-link--reconnecting::before {
+  animation: node-link-pulse 1s ease-in-out infinite;
+}
+.node-link--offline {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-text-secondary) 14%, transparent);
+}
+@keyframes node-link-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
 /* ── Node action toolbar (R20, variant B) — pinned above the card ─ */
 .node-toolbar {
   position: absolute;

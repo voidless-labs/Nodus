@@ -78,10 +78,18 @@ export interface VirtualSetupStatus {
 /** volume-levels payload: keyed by device id OR exe name → level 0..1. */
 export type VolumeLevels = Record<string, number>;
 
+/** Link health of an output device (matches the backend LINK_* codes). */
+export const LINK_ONLINE = 0;
+export const LINK_RECONNECTING = 1;
+export const LINK_OFFLINE = 2;
+/** device-links payload: output device id → LINK_* code. Absent = online/normal. */
+export type DeviceLinks = Record<string, number>;
+
 export type NodusEvent =
   | 'audio-devices-changed'
   | 'process-changed'
   | 'volume-levels'
+  | 'device-links'
   | 'engine-state';
 
 // ── Runtime detection + lazy Tauri API ──────────────────────────────────────

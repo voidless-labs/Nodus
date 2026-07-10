@@ -45,6 +45,7 @@ export function Graph({
   hubs = [],
   search = '',
   levels = {},
+  links = {},
   view,
   setView,
   selection,
@@ -75,6 +76,8 @@ export function Graph({
   search?: string;
   /** Live per-source levels from the engine (keyed by device id / exe name). */
   levels?: Record<string, number>;
+  /** Live per-output-device link health, keyed by device id (LINK_* code). */
+  links?: Record<string, number>;
   /** Canvas pan/zoom transform (R21). */
   view: View;
   setView: React.Dispatch<React.SetStateAction<View>>;
@@ -472,6 +475,8 @@ export function Graph({
         {nodes.map((n) => {
           // Live meter: the engine reports levels by device id or exe name.
           const live = (n.deviceId && levels[n.deviceId]) ?? (n.exeName && levels[n.exeName]);
+          // Live link health of an output device (undefined = online/normal).
+          const link = n.deviceId ? links[n.deviceId] : undefined;
           const node = {
             ...n,
             ...(typeof live === 'number' ? { level: live } : null),
@@ -481,6 +486,7 @@ export function Graph({
             <NodeCard
               key={n.id}
               node={node}
+              link={link}
               search={searchFor(n.name, search)}
               actions={n.id === soleSelected}
               onVolume={onNodeVolume}

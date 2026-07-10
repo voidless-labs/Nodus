@@ -439,6 +439,7 @@ export default function NodusApp() {
               hubs={scene.hubs}
               search={search}
               levels={backend.levels}
+              links={backend.links}
               view={viewCtl.view}
               setView={viewCtl.setView}
               selection={selection}

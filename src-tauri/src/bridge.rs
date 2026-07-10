@@ -402,6 +402,7 @@ pub fn setup_background_tasks(
     let settings_levels = settings.clone();
     std::thread::spawn(move || {
         let mut prev: std::collections::HashMap<String, f32> = Default::default();
+        let mut prev_links: std::collections::HashMap<String, u8> = Default::default();
         let mut was_running = false;
         let publish = |payload: serde_json::Value, bus: &crate::daemon::EventBus| {
             let _ = bus.send(crate::daemon::ServerEvent {
@@ -426,6 +427,24 @@ pub fn setup_background_tasks(
                     event: "engine-state".into(),
                     payload: serde_json::json!(running),
                 });
+            }
+            // Link status per output device (online / reconnecting / offline) — emitted
+            // independently of the VU toggle (a user who turned meters off still wants
+            // to see a device drop out), and only when it changes (rare). Payload:
+            // {device_id: 0|1|2}. Empty while the engine is stopped → UI clears dots.
+            let links = if running {
+                engine.0.get_link_states()
+            } else {
+                Default::default()
+            };
+            if links != prev_links {
+                if let Ok(payload) = serde_json::to_value(&links) {
+                    let _ = bus_levels.send(crate::daemon::ServerEvent {
+                        event: "device-links".into(),
+                        payload,
+                    });
+                }
+                prev_links = links;
             }
             // VU disabled (t14) or engine stopped → make sure meters are zeroed once,
             // then idle. Engine-state above still flows so the button stays in sync.

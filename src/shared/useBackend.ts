@@ -10,6 +10,7 @@ import {
   stopEngine,
   type AudioDevice,
   type AudioProcess,
+  type DeviceLinks,
   type VolumeLevels,
 } from '@/shared/bridge';
 
@@ -60,6 +61,9 @@ export interface Backend {
   processes: AudioProcess[];
   /** Live per-source levels, keyed by device id or exe name (0..1). */
   levels: VolumeLevels;
+  /** Live per-output-device link health, keyed by device id (LINK_* code).
+   *  A device absent from the map is online/normal. */
+  links: DeviceLinks;
   live: boolean;
   /** Turn the engine on/off. `onStarted` runs once the engine has started
    *  (used to push the current routing graph). No-op argument in the browser. */
@@ -71,6 +75,7 @@ export function useBackend(): Backend {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [processes, setProcesses] = useState<AudioProcess[]>([]);
   const [levels, setLevels] = useState<VolumeLevels>({});
+  const [links, setLinks] = useState<DeviceLinks>({});
   const [live, setLiveState] = useState(false);
   const unsubs = useRef<Array<() => void>>([]);
 
@@ -104,6 +109,7 @@ export function useBackend(): Backend {
         await listenToEvent<AudioDevice[]>('audio-devices-changed', (d) => setDevices(d)),
         await listenToEvent<AudioProcess[]>('process-changed', (p) => setProcesses(p)),
         await listenToEvent<VolumeLevels>('volume-levels', (l) => setLevels(l ?? {})),
+        await listenToEvent<DeviceLinks>('device-links', (m) => setLinks(m ?? {})),
         // Engine on/off driven by the engine itself → every client stays in sync.
         // Raw setter (no start/stop call) so this can't loop with the broadcaster.
         await listenToEvent<boolean>('engine-state', (on) => setLiveState(!!on)),
@@ -128,8 +134,9 @@ export function useBackend(): Backend {
     } else {
       void stopEngine().catch((e) => console.error('stop_engine:', e));
       setLevels({});
+      setLinks({});
     }
   }, []);
 
-  return { ready, tauri: isTauri, devices, processes, levels, live, setLive };
+  return { ready, tauri: isTauri, devices, processes, levels, links, live, setLive };
 }

@@ -114,6 +114,15 @@ impl RouteSink {
             RouteSink::VirtualMic(v) => v.current_level(),
         }
     }
+
+    /// Link state (LINK_* code) of this sink's destination. Our own virtual mic is
+    /// a kernel ring — it never has a Bluetooth-style dropout, so it's always online.
+    fn link_state(&self) -> u8 {
+        match self {
+            RouteSink::Wasapi(r) => r.link_state(),
+            RouteSink::VirtualMic(_) => crate::audio::session::LINK_ONLINE,
+        }
+    }
 }
 
 struct RouteHandles {
@@ -336,6 +345,28 @@ impl RoutingEngine {
             levels.insert(dev, ((db + 60.0) / 60.0).clamp(0.0, 1.0));
         }
         levels
+    }
+
+    /// Link state per output device (LINK_* code) for the per-node UI status dot.
+    /// A device may back several routes (several render threads); it's reported by
+    /// the healthiest of them (min code: any online route ⇒ the device is online).
+    pub fn get_link_states(&self) -> HashMap<String, u8> {
+        let mut states: HashMap<String, u8> = HashMap::new();
+        for handles in lock_recover(&self.routes).values() {
+            for h in handles {
+                if h.to_device_id.is_empty() {
+                    continue;
+                }
+                if let Some(sink) = &h.sink {
+                    let code = sink.link_state();
+                    states
+                        .entry(h.to_device_id.clone())
+                        .and_modify(|c| *c = (*c).min(code))
+                        .or_insert(code);
+                }
+            }
+        }
+        states
     }
 
     fn start_internal(&self) -> Result<(), EngineError> {
