@@ -131,6 +131,7 @@ export function HubNode({
       <div className="node-label">
         <span className="node-label-dot" />
         {split ? 'splitter' : 'mixer'}
+        {pinned && <span className="node-pin-tag">pinned</span>}
       </div>
 
       <div className="node-card" ref={cardRef} onMouseMove={onGlowMove}>

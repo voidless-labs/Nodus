@@ -101,7 +101,9 @@
   width: 100%;
   border: none;
   background: none;
-  font: inherit;
+  /* Only inherit the family — NOT `font` shorthand, which would reset font-size
+     and override .bb-group-h's 9.5px (made "other" larger than the group labels). */
+  font-family: inherit;
   cursor: pointer;
   transition: color var(--transition-fast);
 }
