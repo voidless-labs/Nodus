@@ -155,6 +155,10 @@ pub struct RoutingEngine {
     /// locks: real-time set_route_volume/mute never take it, so a graph apply (which holds
     /// it across the ~80ms WASAPI settle) can't stall the volume slider.
     restart_lock: Mutex<()>,
+    /// JSON of the last-applied graph. A re-apply of an identical graph while
+    /// running is a no-op — no teardown — so redundant applies don't flicker the
+    /// engine (on→off→on) or drop a self-healing capture whose app is out. (t19)
+    last_applied: Mutex<Option<String>>,
 }
 
 impl RoutingEngine {
@@ -166,6 +170,7 @@ impl RoutingEngine {
             routes: Arc::new(Mutex::new(HashMap::new())),
             format: AudioFormat::default(),
             restart_lock: Mutex::new(()),
+            last_applied: Mutex::new(None),
         }
     }
 
@@ -173,12 +178,25 @@ impl RoutingEngine {
     pub fn apply_graph(&self, snapshot: RoutingGraph) -> Result<(), EngineError> {
         let _restart = lock_recover(&self.restart_lock);
 
+        // Skip a redundant re-apply of an UNCHANGED graph while running. A restart
+        // tears down + re-resolves every route, which (a) flickers the engine
+        // on→off→on and storms if the UI re-applies the same graph, and (b) drops a
+        // self-healing capture whose source app is momentarily gone → its recovery
+        // never runs. Compare by serialized JSON (RoutingGraph isn't PartialEq). (t19)
+        let key = serde_json::to_string(&snapshot).unwrap_or_default();
+        if self.running.load(Ordering::SeqCst)
+            && lock_recover(&self.last_applied).as_deref() == Some(key.as_str())
+        {
+            return Ok(());
+        }
+
         // Validate + swap the graph (held briefly — released before the restart below).
         {
             let mut g = lock_recover(&self.graph);
             g.apply_snapshot(snapshot)
                 .map_err(|e| EngineError::Session(e.to_string()))?;
         }
+        *lock_recover(&self.last_applied) = Some(key);
 
         if self.running.load(Ordering::SeqCst) {
             self.stop_internal();
