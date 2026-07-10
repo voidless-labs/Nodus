@@ -419,7 +419,11 @@ impl RoutingEngine {
             //  - Device loopback → the device's mix format (channels/rate vary).
             let (mut source, mut fmt) = match backend {
                 Backend::Process(pid) => (
-                    CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(pid, self.format)),
+                    CaptureSource::ProcessLoopback(ProcessLoopbackCapture::new(
+                        pid,
+                        ar.exe_name.clone(),
+                        self.format,
+                    )),
                     self.format,
                 ),
                 Backend::Virtual => {

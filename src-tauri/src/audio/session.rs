@@ -15,7 +15,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use super::wasapi::{AudioFormat, WasapiError};
 
@@ -604,6 +604,10 @@ pub mod platform {
     /// normal playback or other apps on the same device.
     pub struct ProcessLoopbackCapture {
         pid: u32,
+        /// Exe of the source app. Kept so the capture can re-resolve a fresh PID
+        /// when the app is closed and reopened (new PID) — otherwise the capture
+        /// stays bound to the dead PID and silently produces nothing. (t19)
+        exe_name: Option<String>,
         format: AudioFormat,
         stop_flag: Arc<AtomicBool>,
         sender: Option<broadcast::Sender<AudioFrame>>,
@@ -611,9 +615,10 @@ pub mod platform {
     }
 
     impl ProcessLoopbackCapture {
-        pub fn new(pid: u32, format: AudioFormat) -> Self {
+        pub fn new(pid: u32, exe_name: Option<String>, format: AudioFormat) -> Self {
             Self {
                 pid,
+                exe_name,
                 format,
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 sender: None,
@@ -638,12 +643,13 @@ pub mod platform {
             self.stop_flag.store(false, Ordering::SeqCst);
 
             let pid = self.pid;
+            let exe_name = self.exe_name.clone();
             let format = self.format;
             let stop_flag = Arc::clone(&self.stop_flag);
             let level = Arc::clone(&self.level);
 
             std::thread::spawn(move || {
-                if let Err(e) = run_process_loopback(pid, format, stop_flag, tx, level) {
+                if let Err(e) = run_process_loopback(pid, exe_name, format, stop_flag, tx, level) {
                     error!("process loopback capture error (pid {pid}): {e}");
                 }
             });
@@ -657,14 +663,78 @@ pub mod platform {
         }
     }
 
+    /// Is this PID still a live process? A closed app → re-resolve by exe. (t19)
+    fn pid_alive(pid: u32) -> bool {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        unsafe {
+            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                Ok(h) => {
+                    let _ = CloseHandle(h);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+    }
+
+    /// Self-healing per-app capture: when the source app is closed and reopened it
+    /// gets a NEW pid, so the old capture would sit silent forever. On loss,
+    /// re-resolve the pid from the exe (waiting for the app to come back) and
+    /// re-open. A bare pid (`exe_name = None`) can't recover. (t19)
     fn run_process_loopback(
-        pid: u32,
+        mut pid: u32,
+        exe_name: Option<String>,
         format: AudioFormat,
         stop_flag: Arc<AtomicBool>,
         sender: broadcast::Sender<AudioFrame>,
         level: Arc<std::sync::atomic::AtomicU32>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
+        let _com = ComGuard::init()?;
+        loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            match process_capture_session(pid, format, &stop_flag, &sender, &level) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if stop_flag.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    let exe = match exe_name.as_deref() {
+                        Some(x) => x,
+                        None => return Err(e), // bare pid — nothing to re-resolve
+                    };
+                    warn!("process capture (pid {pid}) lost ({e}); re-resolving '{exe}'…");
+                    level.store(0, Ordering::Relaxed);
+                    // Wait for the app to be running again with an audio session.
+                    loop {
+                        if stop_flag.load(Ordering::SeqCst) {
+                            return Ok(());
+                        }
+                        match find_audio_pid_for_exe(exe) {
+                            Ok(np) => {
+                                pid = np;
+                                break;
+                            }
+                            Err(_) => std::thread::sleep(Duration::from_millis(500)),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One process-loopback capture session — pumps until stop or the pid dies
+    /// (detected via a periodic liveness check → recoverable error for the caller).
+    fn process_capture_session(
+        pid: u32,
+        format: AudioFormat,
+        stop_flag: &Arc<AtomicBool>,
+        sender: &broadcast::Sender<AudioFrame>,
+        level: &Arc<std::sync::atomic::AtomicU32>,
+    ) -> Result<(), SessionError> {
         use windows::core::Interface;
         use windows::Win32::Foundation::{CloseHandle, FALSE, TRUE};
         use windows::Win32::Media::Audio::{
@@ -674,8 +744,6 @@ pub mod platform {
             PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
         };
         use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
-
-        let _com = ComGuard::init()?;
 
         unsafe {
             // Capture only this PID's process tree.
@@ -771,7 +839,18 @@ pub mod platform {
 
             debug!("process loopback capture started (pid {pid})");
 
+            let mut last_live_check = std::time::Instant::now();
             while !stop_flag.load(Ordering::SeqCst) {
+                // Detect the app closing: process loopback on a dead pid just goes
+                // silent (no error), so poll liveness ~1/s → recoverable error. (t19)
+                if last_live_check.elapsed() > Duration::from_millis(1000) {
+                    last_live_check = std::time::Instant::now();
+                    if !pid_alive(pid) {
+                        return Err(SessionError::DeviceUnavailable(format!(
+                            "process {pid} exited"
+                        )));
+                    }
+                }
                 let mut data_ptr = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
@@ -866,6 +945,28 @@ pub mod platform {
         }
     }
 
+    /// Is a render failure recoverable (device unplugged / invalidated, e.g. a
+    /// Bluetooth sink going away and returning) rather than permanent (wrong
+    /// endpoint type, unsupported format)? Recoverable → retry; else give up. (t19)
+    fn is_recoverable(e: &SessionError) -> bool {
+        match e {
+            // "device not found" during re-enumerate (BT not back yet) — but NOT
+            // the wrong-endpoint-type config error, which never fixes itself.
+            SessionError::DeviceUnavailable(m) => !m.contains("capture endpoint"),
+            SessionError::Wasapi(w) => {
+                let s = w.to_string();
+                s.contains("88890004") /* AUDCLNT_E_DEVICE_INVALIDATED */
+                    || s.contains("8889000A") /* AUDCLNT_E_DEVICE_IN_USE (transient) */
+            }
+            _ => false,
+        }
+    }
+
+    /// Self-healing render: a Bluetooth sink (or any output) can vanish and come
+    /// back, or the default device change. Instead of the thread dying — a silent
+    /// route until a manual engine restart — re-open the WASAPI client on a
+    /// recoverable error and keep going. The `source` receiver stays live across
+    /// re-opens (the capture keeps producing). (t19)
     #[allow(clippy::too_many_arguments)]
     fn run_render(
         device_id: String,
@@ -883,12 +984,47 @@ pub mod platform {
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
 
+        loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            match render_session(
+                &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic, &level,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(e) if is_recoverable(&e) => {
+                    if stop_flag.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    warn!("render on {device_id} interrupted ({e}); reconnecting…");
+                    level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
+                    // The device (e.g. BT) may need a moment to reappear as ACTIVE.
+                    std::thread::sleep(Duration::from_millis(400));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// One WASAPI render session — opens the client and pumps until stop or error.
+    #[allow(clippy::too_many_arguments)]
+    fn render_session(
+        device_id: &str,
+        format: AudioFormat,
+        stop_flag: &Arc<AtomicBool>,
+        source: &mut tokio::sync::broadcast::Receiver<AudioFrame>,
+        volume_atomic: &Arc<std::sync::atomic::AtomicU32>,
+        muted: &Arc<AtomicBool>,
+        pan_atomic: &Arc<std::sync::atomic::AtomicU32>,
+        level: &Arc<std::sync::atomic::AtomicU32>,
+    ) -> Result<(), SessionError> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .map_err(|e| SessionError::DeviceUnavailable(e.to_string()))?;
 
-            let device = get_device_by_id(&enumerator, &device_id)?;
+            let device = get_device_by_id(&enumerator, device_id)?;
 
             // Guard: verify this is a render endpoint — Initialize() on a capture endpoint
             // returns AUDCLNT_E_WRONG_ENDPOINT_TYPE (0x88890003).
@@ -1073,7 +1209,7 @@ pub mod platform {
     }
 
     impl ProcessLoopbackCapture {
-        pub fn new(_pid: u32, _format: AudioFormat) -> Self {
+        pub fn new(_pid: u32, _exe_name: Option<String>, _format: AudioFormat) -> Self {
             Self { sender: None }
         }
         pub fn current_level(&self) -> f32 { 0.0 }
