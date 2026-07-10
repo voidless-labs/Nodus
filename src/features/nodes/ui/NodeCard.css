@@ -84,6 +84,18 @@
   50% { opacity: 0.25; }
 }
 
+/* ── Pinned marker on the label (mirrors the solo tag; t24-C) ── */
+.node-pin-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #6ea8fe;
+  background: color-mix(in srgb, #6ea8fe 16%, transparent);
+}
+
 /* ── Node action toolbar (R20, variant B) — pinned above the card ─ */
 .node-toolbar {
   position: absolute;

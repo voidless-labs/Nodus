@@ -97,6 +97,8 @@ export function BottomBar({
     onCreateVirtual?.(kind, name);
   };
   const [q, setQ] = useState('');
+  // t24-A: third-party ("other") virtual devices are collapsed by default.
+  const [otherOpen, setOtherOpen] = useState(false);
 
   const setQuery = (v: string) => {
     setQ(v);
@@ -107,6 +109,9 @@ export function BottomBar({
   // Show the whole category; while typing, matching items are highlighted (not
   // filtered out) — same idea as the canvas highlight.
   const items = shownTab === 'virtual' ? [] : CATALOG[shownTab];
+  // t24-B: split our own virtual devices into mics (input) and speakers (output).
+  const ourMics = virtualOwn.filter((d) => d.device_type === 'input');
+  const ourSpeakers = virtualOwn.filter((d) => d.device_type === 'output');
   const matchOf = (name: string): 'match' | 'dim' | '' => {
     const t = q.trim().toLowerCase();
     if (!t) return '';
@@ -181,6 +186,28 @@ export function BottomBar({
     );
   };
 
+  // The "name it" card shown while creating a device — rendered in the matching
+  // group (mic vs speaker) so the pending device appears where it will live.
+  const pendingCard = pending && (
+    <div className="bb-card">
+      <input
+        className="bb-card-name name-input"
+        autoFocus
+        value={pending.name}
+        placeholder={defaultVirtualName?.(pending.kind)}
+        onChange={(e) => setPending({ ...pending, name: e.target.value })}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') commitCreate();
+          if (e.key === 'Escape') setPending(null);
+        }}
+        onBlur={commitCreate}
+      />
+      <span className="bb-card-sub">name it · Enter to create · Esc to cancel</span>
+    </div>
+  );
+
   return (
     <>
       {active && <div className="bb-overlay" onClick={() => setActive(null)} />}
@@ -201,30 +228,10 @@ export function BottomBar({
                 <div className="bb-mid-h">{shownTab}</div>
                 {shownTab === 'virtual' ? (
                   <>
-                    <div className="bb-group-h">ours</div>
+                    <div className="bb-group-h">our mic</div>
                     <div className="bb-grid">
-                      {virtualOwn.map((dev) => deviceCard(dev))}
-                      {pending && (
-                        <div className="bb-card">
-                          <input
-                            className="bb-card-name name-input"
-                            autoFocus
-                            value={pending.name}
-                            placeholder={defaultVirtualName?.(pending.kind)}
-                            onChange={(e) => setPending({ ...pending, name: e.target.value })}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onKeyDown={(e) => {
-                              e.stopPropagation();
-                              if (e.key === 'Enter') commitCreate();
-                              if (e.key === 'Escape') setPending(null);
-                            }}
-                            onBlur={commitCreate}
-                          />
-                          <span className="bb-card-sub">
-                            name it · Enter to create · Esc to cancel
-                          </span>
-                        </div>
-                      )}
+                      {ourMics.map((dev) => deviceCard(dev))}
+                      {pending?.kind === 'capture' && pendingCard}
                       <button
                         className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
@@ -233,6 +240,12 @@ export function BottomBar({
                         <span className="bb-card-name">+ new mic</span>
                         <span className="bb-card-sub">create a virtual mic</span>
                       </button>
+                    </div>
+
+                    <div className="bb-group-h">our speaker</div>
+                    <div className="bb-grid">
+                      {ourSpeakers.map((dev) => deviceCard(dev))}
+                      {pending?.kind === 'render' && pendingCard}
                       <button
                         className="bb-card bb-card--add"
                         tabIndex={active ? 0 : -1}
@@ -242,10 +255,35 @@ export function BottomBar({
                         <span className="bb-card-sub">create a virtual output</span>
                       </button>
                     </div>
+
                     {virtualOther.length > 0 && (
                       <>
-                        <div className="bb-group-h">other</div>
-                        <div className="bb-grid">{virtualOther.map((dev) => deviceCard(dev))}</div>
+                        <button
+                          className="bb-group-h bb-group-toggle"
+                          aria-expanded={otherOpen}
+                          tabIndex={active ? 0 : -1}
+                          onClick={() => setOtherOpen((o) => !o)}
+                        >
+                          <svg
+                            className={`bb-chevron ${otherOpen ? 'is-open' : ''}`}
+                            width="10"
+                            height="10"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M9 6l6 6-6 6" />
+                          </svg>
+                          other ({virtualOther.length})
+                        </button>
+                        {otherOpen && (
+                          <div className="bb-grid">
+                            {virtualOther.map((dev) => deviceCard(dev))}
+                          </div>
+                        )}
                       </>
                     )}
                   </>

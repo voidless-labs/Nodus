@@ -93,6 +93,7 @@ export function NodeCard({
         <span className="node-label-dot" />
         {kindLabel(node.kind, node.micSink)}
         {node.solo && <span className="node-solo-tag">solo</span>}
+        {pinned && <span className="node-pin-tag">pinned</span>}
         {status && <span className={`node-link node-link--${status}`}>{status}</span>}
       </div>
 

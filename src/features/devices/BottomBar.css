@@ -92,6 +92,28 @@
   color: var(--color-text-dim);
   padding: 6px 4px 6px;
 }
+/* t24-A: "other" header is a collapse toggle. Reset button chrome, keep the
+   group-heading look, add a rotating chevron. */
+.bb-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.bb-group-toggle:hover {
+  color: var(--color-text-secondary);
+}
+.bb-chevron {
+  transition: transform var(--transition-fast);
+}
+.bb-chevron.is-open {
+  transform: rotate(90deg);
+}
 .bb-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
