@@ -45,6 +45,16 @@ export default function NodusApp() {
   const backend = useBackend();
   const store = useScene(backend.live);
   const { scene } = store;
+  // Live sets for the per-node connection status dot (t19): which devices are
+  // present, and which audio apps are running (exe names, lowercased for match).
+  const presentDevices = useMemo(
+    () => new Set(backend.devices.map((d) => d.id)),
+    [backend.devices],
+  );
+  const runningApps = useMemo(
+    () => new Set(backend.processes.map((p) => p.exe_name.toLowerCase())),
+    [backend.processes],
+  );
   const settingsCtl = useSettings();
   const [setupOpen, setSetupOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -440,6 +450,8 @@ export default function NodusApp() {
               search={search}
               levels={backend.levels}
               links={backend.links}
+              presentDevices={presentDevices}
+              runningApps={runningApps}
               view={viewCtl.view}
               setView={viewCtl.setView}
               selection={selection}

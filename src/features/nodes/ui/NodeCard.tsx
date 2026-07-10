@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import './NodeCard.css';
-import { KIND_COLOR_VAR, kindLabel, type NodeModel } from '@/features/nodes/types';
-import { LINK_OFFLINE, LINK_RECONNECTING } from '@/shared/bridge';
+import { KIND_COLOR_VAR, kindLabel, type LinkStatus, type NodeModel } from '@/features/nodes/types';
 import { NodeIcon } from '@/features/nodes/ui/NodeIcon';
 import { VolumeSlider } from '@/shared/ui/VolumeSlider';
 import { NodeToolbar } from '@/features/nodes/ui/NodeToolbar';
@@ -27,7 +26,7 @@ export function NodeCard({
   node,
   search,
   actions,
-  link,
+  status,
   onVolume,
   onMute,
   onSolo,
@@ -41,8 +40,8 @@ export function NodeCard({
   search?: 'match' | 'dim';
   /** Show the action toolbar (sole selected node) — R20. */
   actions?: boolean;
-  /** Live link health of this node's output device (LINK_* code; t19). */
-  link?: number;
+  /** Live connection status shown persistently on the node (t19). */
+  status?: LinkStatus;
   onVolume?: (id: string, volume: number) => void;
   onMute?: (id: string) => void;
   onSolo?: (id: string) => void;
@@ -94,10 +93,7 @@ export function NodeCard({
         <span className="node-label-dot" />
         {kindLabel(node.kind, node.micSink)}
         {node.solo && <span className="node-solo-tag">solo</span>}
-        {link === LINK_RECONNECTING && (
-          <span className="node-link node-link--reconnecting">reconnecting</span>
-        )}
-        {link === LINK_OFFLINE && <span className="node-link node-link--offline">offline</span>}
+        {status && <span className={`node-link node-link--${status}`}>{status}</span>}
       </div>
 
       <div className="node-card" ref={cardRef} onMouseMove={onGlowMove}>

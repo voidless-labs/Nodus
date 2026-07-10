@@ -41,7 +41,8 @@
   background: var(--color-accent-soft);
 }
 
-/* ── Link status chip (t19): output device dropped / reconnecting / offline ── */
+/* ── Link status chip (t19): persistent per-node connection state ──
+   online (steady green glow) · reconnecting (amber pulse) · offline (muted). */
 .node-link {
   margin-left: auto;
   display: inline-flex;
@@ -59,6 +60,13 @@
   height: 5px;
   border-radius: 50%;
   background: currentColor;
+}
+.node-link--online {
+  color: #35c46a;
+  background: color-mix(in srgb, #35c46a 15%, transparent);
+}
+.node-link--online::before {
+  box-shadow: 0 0 5px 1px currentColor; /* steady glow — "светится постоянно" */
 }
 .node-link--reconnecting {
   color: #e0a53b;

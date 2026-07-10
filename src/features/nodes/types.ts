@@ -33,6 +33,11 @@ export function kindLabel(kind: NodeKind, isMicSink = false): string {
   return kind;
 }
 
+/** Live connection status shown on a source/output node (t19).
+ *  online = app running / device present & playing · reconnecting = a playing
+ *  output just dropped and is retrying · offline = app closed / device gone. */
+export type LinkStatus = 'online' | 'reconnecting' | 'offline';
+
 /** The data a NodeCard needs to render. Wired to the engine in R3. */
 export interface NodeModel {
   id: string;

@@ -3,8 +3,35 @@ import './Graph.css';
 import { NodeCard } from '@/features/nodes/ui/NodeCard';
 import { HubNode } from '@/features/nodes/ui/HubNode';
 import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
-import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
+import type { EdgeModel, HubModel, LinkStatus, NodeModel } from '@/features/nodes/types';
+import { LINK_OFFLINE, LINK_ONLINE, LINK_RECONNECTING } from '@/shared/bridge';
 import type { View } from '@/shared/hooks/useView';
+
+/** Live connection status of a source/output node, from the engine's live data.
+ *  App sources → running process? · device/output nodes → the render link state
+ *  when the engine is driving it, else simple device presence. Hubs/fx have none. */
+const EMPTY_SET: Set<string> = new Set();
+
+function nodeStatus(
+  n: NodeModel,
+  links: Record<string, number>,
+  presentDevices: Set<string>,
+  runningApps: Set<string>,
+): LinkStatus | undefined {
+  if (n.kind !== 'source' && n.kind !== 'output' && n.kind !== 'virtual') return undefined;
+  if (n.exeName) {
+    return runningApps.has(n.exeName.toLowerCase()) ? 'online' : 'offline';
+  }
+  if (n.deviceId) {
+    const code = links[n.deviceId];
+    if (code === LINK_RECONNECTING) return 'reconnecting';
+    if (code === LINK_OFFLINE) return 'offline';
+    if (code === LINK_ONLINE) return 'online';
+    // No live render link (engine idle, or an input device) → fall back to presence.
+    return presentDevices.has(n.deviceId) ? 'online' : 'offline';
+  }
+  return undefined;
+}
 
 /**
  * Graph — the node cards plus the wires between them (R8 + R5 hub + R21 pan/zoom).
@@ -46,6 +73,8 @@ export function Graph({
   search = '',
   levels = {},
   links = {},
+  presentDevices,
+  runningApps,
   view,
   setView,
   selection,
@@ -78,6 +107,10 @@ export function Graph({
   levels?: Record<string, number>;
   /** Live per-output-device link health, keyed by device id (LINK_* code). */
   links?: Record<string, number>;
+  /** Ids of devices currently present (enumerated) — for the node status dot. */
+  presentDevices?: Set<string>;
+  /** Lowercased exe names of currently-running audio apps — for the status dot. */
+  runningApps?: Set<string>;
   /** Canvas pan/zoom transform (R21). */
   view: View;
   setView: React.Dispatch<React.SetStateAction<View>>;
@@ -475,8 +508,8 @@ export function Graph({
         {nodes.map((n) => {
           // Live meter: the engine reports levels by device id or exe name.
           const live = (n.deviceId && levels[n.deviceId]) ?? (n.exeName && levels[n.exeName]);
-          // Live link health of an output device (undefined = online/normal).
-          const link = n.deviceId ? links[n.deviceId] : undefined;
+          // Live connection status shown persistently on the node (t19).
+          const status = nodeStatus(n, links, presentDevices ?? EMPTY_SET, runningApps ?? EMPTY_SET);
           const node = {
             ...n,
             ...(typeof live === 'number' ? { level: live } : null),
@@ -486,7 +519,7 @@ export function Graph({
             <NodeCard
               key={n.id}
               node={node}
-              link={link}
+              status={status}
               search={searchFor(n.name, search)}
               actions={n.id === soleSelected}
               onVolume={onNodeVolume}
