@@ -6,6 +6,10 @@
     "module": "ESNext",
     "skipLibCheck": true,
 
+    /* `@/…` → `src/…` for the feature-sliced layout. */
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+
     /* Bundler mode — Vite (esbuild) transpiles; tsc is for type-checking only. */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

@@ -11,7 +11,7 @@ import {
   type AudioDevice,
   type AudioProcess,
   type VolumeLevels,
-} from './bridge';
+} from '@/shared/bridge';
 
 // A live backend is available either in the Tauri runtime OR over the web daemon
 // (t17). Only when neither is present do we fall back to sample data.

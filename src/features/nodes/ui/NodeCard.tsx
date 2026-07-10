@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
 import './NodeCard.css';
-import { KIND_COLOR_VAR, kindLabel, type NodeModel } from './types';
-import { NodeIcon } from './NodeIcon';
-import { VolumeSlider } from './VolumeSlider';
-import { NodeToolbar } from './NodeToolbar';
-import { EditableName } from './EditableName';
+import { KIND_COLOR_VAR, kindLabel, type NodeModel } from '@/features/nodes/types';
+import { NodeIcon } from '@/features/nodes/ui/NodeIcon';
+import { VolumeSlider } from '@/shared/ui/VolumeSlider';
+import { NodeToolbar } from '@/features/nodes/ui/NodeToolbar';
+import { EditableName } from '@/shared/ui/EditableName';
 
 /**
  * NodeCard — one node on the canvas (R4, matched to Node-design-v2).

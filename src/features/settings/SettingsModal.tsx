@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getServerInfo, openExternal, type Settings, type ServerInfo } from '../bridge';
-import pkg from '../../package.json';
+import { getServerInfo, openExternal, type Settings, type ServerInfo } from '@/shared/bridge';
+import pkg from '../../../package.json';
 import './SettingsModal.css';
 
 /** Accent presets — the default amber plus a few on-brand alternatives. */

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { emitEvent, listenAny, setFlyoutPinned, showMainWindow } from './bridge';
-import { Topbar } from './ui/Topbar';
-import { EngineButton } from './ui/EngineButton';
-import { QuickList, type QuickItem } from './ui/QuickPanel';
+import { emitEvent, listenAny, setFlyoutPinned, showMainWindow } from '@/shared/bridge';
+import { Topbar } from '@/features/topbar/Topbar';
+import { EngineButton } from '@/features/topbar/EngineButton';
+import { QuickList, type QuickItem } from '@/features/topbar/QuickPanel';
 import './FlyoutApp.css';
 
 /**

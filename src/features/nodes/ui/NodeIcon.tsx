@@ -1,4 +1,4 @@
-import type { NodeModel } from './types';
+import type { NodeModel } from '@/features/nodes/types';
 
 /**
  * NodeIcon — the avatar inside a node card.

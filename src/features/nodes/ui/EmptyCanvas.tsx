@@ -1,5 +1,5 @@
 import './EmptyCanvas.css';
-import type { PresetId } from '../scenes';
+import type { PresetId } from '@/features/nodes/scenes';
 
 /**
  * EmptyCanvas — first-run empty state (R16).

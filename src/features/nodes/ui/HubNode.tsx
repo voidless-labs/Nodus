@@ -1,9 +1,9 @@
 import { useRef } from 'react';
 import './HubNode.css';
-import type { HubModel } from './types';
-import { VolumeSlider } from './VolumeSlider';
-import { NodeToolbar } from './NodeToolbar';
-import { EditableName } from './EditableName';
+import type { HubModel } from '@/features/nodes/types';
+import { VolumeSlider } from '@/shared/ui/VolumeSlider';
+import { NodeToolbar } from '@/features/nodes/ui/NodeToolbar';
+import { EditableName } from '@/shared/ui/EditableName';
 
 /**
  * HubNode — the routing hub, in two mirror roles (R5 + the strict-port redesign):

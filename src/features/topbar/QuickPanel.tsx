@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import './QuickPanel.css';
-import type { HubModel, NodeModel } from './nodes/types';
-import { VolumeSlider } from './nodes/VolumeSlider';
+import type { HubModel, NodeModel } from '@/features/nodes/types';
+import { VolumeSlider } from '@/shared/ui/VolumeSlider';
 
 /**
  * QuickPanel — the quick-controls popup (t13, Phase A).

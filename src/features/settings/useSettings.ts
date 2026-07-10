@@ -7,7 +7,7 @@ import {
   listenAny,
   setSettings as bridgeSetSettings,
   type Settings,
-} from './bridge';
+} from '@/shared/bridge';
 
 /**
  * useSettings — the application-settings store (t14).

@@ -11,9 +11,9 @@
  * This file is pure (no React, no Tauri) so it can be unit-tested and reused by
  * both "apply on engine start" and the live re-apply path.
  */
-import type { BackendNode, BackendNodeType, RoutingGraph } from './bridge';
-import type { EdgeModel, HubModel, NodeModel } from './ui/nodes/types';
-import type { Scene } from './scenes';
+import type { BackendNode, BackendNodeType, RoutingGraph } from '@/shared/bridge';
+import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
+import type { Scene } from '@/features/nodes/scenes';
 
 /** Map a UI node kind to the backend node type. `logic` is control-only → skipped. */
 const BACKEND_TYPE: Record<string, BackendNodeType | null> = {

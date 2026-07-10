@@ -1,5 +1,5 @@
-import type { AudioDevice, AudioProcess } from './bridge';
-import type { EdgeModel, HubModel, NodeModel } from './ui/nodes/types';
+import type { AudioDevice, AudioProcess } from '@/shared/bridge';
+import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
 
 /** A canvas scene: leaf nodes, hub nodes and the edges between them. */
 export interface Scene {

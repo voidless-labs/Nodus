@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { HubModel, NodeModel } from './ui/nodes/types';
+import type { HubModel, NodeModel } from '@/features/nodes/types';
 
 /**
  * useView — canvas pan/zoom state (R21).

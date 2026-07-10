@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './Graph.css';
-import { NodeCard } from './nodes/NodeCard';
-import { HubNode } from './nodes/HubNode';
-import { EdgePopover } from './EdgePopover';
-import type { EdgeModel, HubModel, NodeModel } from './nodes/types';
-import type { View } from '../useView';
+import { NodeCard } from '@/features/nodes/ui/NodeCard';
+import { HubNode } from '@/features/nodes/ui/HubNode';
+import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
+import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
+import type { View } from '@/shared/hooks/useView';
 
 /**
  * Graph — the node cards plus the wires between them (R8 + R5 hub + R21 pan/zoom).

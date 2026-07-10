@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { winMinimize, winToggleMaximize, winHide, winIsMaximized, onWinResize } from '../bridge';
-import brandIcon from '../assets/brand.png';
+import { winMinimize, winToggleMaximize, winHide, winIsMaximized, onWinResize } from '@/shared/bridge';
+import brandIcon from '@/assets/brand.png';
 import './Topbar.css';
 
 /**

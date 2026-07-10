@@ -1,10 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './styles/tokens.css';
-import './styles/base.css';
-import NodusApp from './NodusApp';
-import FlyoutApp from './FlyoutApp';
-import { windowKind } from './bridge';
+import '@/styles/tokens.css';
+import '@/styles/base.css';
+import NodusApp from '@/app/NodusApp';
+import FlyoutApp from '@/app/FlyoutApp';
+import { windowKind } from '@/shared/bridge';
 
 // The tray flyout window loads the same bundle with ?w=quick → render the
 // compact quick-controls instead of the full app (t13 Phase B2).

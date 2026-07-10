@@ -1,5 +1,5 @@
 import './EdgePopover.css';
-import type { EdgeModel } from './nodes/types';
+import type { EdgeModel } from '@/features/nodes/types';
 
 /**
  * EdgePopover — per-route controls on a wire (R9).

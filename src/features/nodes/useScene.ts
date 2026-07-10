@@ -12,10 +12,10 @@ import {
   type AudioDevice,
   type AudioProcess,
   type SceneSnapshot,
-} from './bridge';
-import { buildRoutingGraph } from './routingGraph';
-import { EMPTY_SCENE, buildPreset, type PresetId, type Scene } from './scenes';
-import type { EdgeModel, HubModel, NodeModel } from './ui/nodes/types';
+} from '@/shared/bridge';
+import { buildRoutingGraph } from '@/features/nodes/routingGraph';
+import { EMPTY_SCENE, buildPreset, type PresetId, type Scene } from '@/features/nodes/scenes';
+import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
 
 /**
  * useScene — the canvas scene store and its engine sync (R18).

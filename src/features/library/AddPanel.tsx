@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import './AddPanel.css';
-import type { AudioDevice, AudioProcess, SourceType } from '../bridge';
+import type { AudioDevice, AudioProcess, SourceType } from '@/shared/bridge';
 
 /**
  * AddPanel — the "+ add" launcher at bottom-left (R13), an accent element.

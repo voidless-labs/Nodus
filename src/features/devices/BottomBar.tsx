@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import './BottomBar.css';
-import type { AudioDevice } from '../bridge';
-import { EditableName } from './nodes/EditableName';
+import type { AudioDevice } from '@/shared/bridge';
+import { EditableName } from '@/shared/ui/EditableName';
 
 /**
  * BottomBar — the floating node library (R12), an accent element.

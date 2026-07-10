@@ -9,25 +9,25 @@ import {
   renameVirtualDevice as bridgeRenameVirtualDevice,
   type AudioDevice,
   type VirtualDeviceInfo,
-} from './bridge';
-import { Canvas } from './ui/Canvas';
-import { Graph } from './ui/Graph';
-import { Topbar } from './ui/Topbar';
-import { EngineButton } from './ui/EngineButton';
-import { BottomBar } from './ui/BottomBar';
-import { ZoomControls } from './ui/ZoomControls';
-import { AddPanel } from './ui/AddPanel';
-import { EmptyCanvas } from './ui/EmptyCanvas';
-import { VirtualDeviceModal } from './ui/VirtualDeviceModal';
-import { SettingsModal } from './ui/SettingsModal';
-import { SelectionBar } from './ui/SelectionBar';
-import { QuickPanel, type QuickItem } from './ui/QuickPanel';
-import { useBackend } from './useBackend';
-import { useScene } from './useScene';
-import { useSettings } from './useSettings';
-import { useView } from './useView';
-import { usePlaceDrag, type PlacePayload } from './usePlaceDrag';
-import { bindScene, buildPreset, type PresetId } from './scenes';
+} from '@/shared/bridge';
+import { Canvas } from '@/features/nodes/ui/Canvas';
+import { Graph } from '@/features/nodes/ui/Graph';
+import { Topbar } from '@/features/topbar/Topbar';
+import { EngineButton } from '@/features/topbar/EngineButton';
+import { BottomBar } from '@/features/devices/BottomBar';
+import { ZoomControls } from '@/features/topbar/ZoomControls';
+import { AddPanel } from '@/features/library/AddPanel';
+import { EmptyCanvas } from '@/features/nodes/ui/EmptyCanvas';
+import { VirtualDeviceModal } from '@/features/devices/VirtualDeviceModal';
+import { SettingsModal } from '@/features/settings/SettingsModal';
+import { SelectionBar } from '@/features/nodes/ui/SelectionBar';
+import { QuickPanel, type QuickItem } from '@/features/topbar/QuickPanel';
+import { useBackend } from '@/shared/useBackend';
+import { useScene } from '@/features/nodes/useScene';
+import { useSettings } from '@/features/settings/useSettings';
+import { useView } from '@/shared/hooks/useView';
+import { usePlaceDrag, type PlacePayload } from '@/shared/hooks/usePlaceDrag';
+import { bindScene, buildPreset, type PresetId } from '@/features/nodes/scenes';
 
 /** Nodus's own virtual device (created here, or Nodus-branded) vs third-party. */
 const isOwnVirtual = (d: AudioDevice) =>
