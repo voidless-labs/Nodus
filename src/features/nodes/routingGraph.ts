@@ -26,12 +26,22 @@ const BACKEND_TYPE: Record<string, BackendNodeType | null> = {
   logic: null, // control-only, not in the audio graph
 };
 
-/** A node is effectively muted by its own mute, or by another node's solo. */
+/** Audio-source nodes (the "channels" solo isolates): app/device sources, plus
+ *  our virtual OUTPUT used as a source. NOT outputs, hubs or mic-sinks. */
+function isAudioSource(node: { kind?: string; virtualSource?: boolean }): boolean {
+  return node.kind === 'source' || (node.kind === 'virtual' && !!node.virtualSource);
+}
+
+/** Effective mute of a node: its own mute, OR — when any source is soloed — a
+ *  non-soloed SOURCE channel. Solo isolates sources: it must NOT mute hubs or
+ *  outputs, otherwise the soloed source's own path THROUGH a mixer TO the output
+ *  gets cut and you hear nothing (the whole point of solo is to hear that source). */
 function effectiveMuted(
-  node: { muted?: boolean; solo?: boolean; kind?: string },
+  node: { muted?: boolean; solo?: boolean; kind?: string; virtualSource?: boolean },
   anySolo: boolean,
 ): boolean {
-  return !!(node.muted || (anySolo && !node.solo));
+  if (node.muted) return true;
+  return anySolo && isAudioSource(node) && !node.solo;
 }
 
 export function buildRoutingGraph(scene: Scene): RoutingGraph {
@@ -42,8 +52,9 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
   nodes.forEach((n) => byId.set(n.id, n));
   hubs.forEach((h) => byId.set(h.id, h));
 
-  // Only leaf nodes carry solo; hubs do not.
-  const anySolo = nodes.some((n) => n.solo);
+  // Solo isolates source channels: only a soloed *source* engages solo (soloing
+  // an output/hub must not silence the whole scene).
+  const anySolo = nodes.some((n) => isAudioSource(n) && n.solo);
 
   // ── Nodes ────────────────────────────────────────────────────────────────
   const backendNodes: BackendNode[] = [];

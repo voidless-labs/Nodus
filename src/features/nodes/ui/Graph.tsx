@@ -524,7 +524,12 @@ export function Graph({
               actions={n.id === soleSelected}
               onVolume={onNodeVolume}
               onMute={onNodeMute}
-              onSolo={onNodeSolo}
+              onSolo={
+                // Solo isolates source channels — only meaningful on sources.
+                n.kind === 'source' || (n.kind === 'virtual' && n.virtualSource)
+                  ? onNodeSolo
+                  : undefined
+              }
               onDuplicate={onNodeDuplicate}
               onDelete={onNodeDelete}
               onRename={onNodeRename}
