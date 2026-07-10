@@ -19,10 +19,6 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Allow the legacy .jsx files to coexist while their logic is ported. */
-    "allowJs": true,
-    "checkJs": false,
-
     /* Linting — kept lenient during the incremental redesign build. */
     "strict": true,
     "noUnusedLocals": false,
