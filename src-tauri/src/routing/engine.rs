@@ -68,6 +68,16 @@ impl CaptureSource {
             CaptureSource::Virtual(c) => c.stop(),
         }
     }
+
+    /// Link state of a *device* source (loopback / input) as (device_id, LINK_* code),
+    /// for the source node's status dot. App (process) and virtual sources have no
+    /// device link — their status comes from process detection / presence → None.
+    fn device_link(&self) -> Option<(String, u8)> {
+        match self {
+            CaptureSource::Loopback(c) => Some((c.device_id().to_string(), c.link_state())),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -352,6 +362,7 @@ impl RoutingEngine {
     /// the healthiest of them (min code: any online route ⇒ the device is online).
     pub fn get_link_states(&self) -> HashMap<String, u8> {
         let mut states: HashMap<String, u8> = HashMap::new();
+        // Output devices (render sinks).
         for handles in lock_recover(&self.routes).values() {
             for h in handles {
                 if h.to_device_id.is_empty() {
@@ -364,6 +375,15 @@ impl RoutingEngine {
                         .and_modify(|c| *c = (*c).min(code))
                         .or_insert(code);
                 }
+            }
+        }
+        // Input/loopback device sources (self-healing too, t19).
+        for handle in lock_recover(&self.captures).values() {
+            if let Some((dev, code)) = handle.capture.device_link() {
+                states
+                    .entry(dev)
+                    .and_modify(|c| *c = (*c).min(code))
+                    .or_insert(code);
             }
         }
         states

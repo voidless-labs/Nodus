@@ -180,6 +180,8 @@ pub mod platform {
         stop_flag: Arc<AtomicBool>,
         sender: Option<broadcast::Sender<AudioFrame>>,
         level: Arc<std::sync::atomic::AtomicU32>,
+        /// LINK_* health of the captured device (for the source node's status dot, t19).
+        link: Arc<std::sync::atomic::AtomicU8>,
     }
 
     impl LoopbackCapture {
@@ -190,11 +192,23 @@ pub mod platform {
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 sender: None,
                 level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                // Present-and-capturing flips it online within ms of the thread starting.
+                link: Arc::new(std::sync::atomic::AtomicU8::new(LINK_OFFLINE)),
             }
         }
 
         pub fn current_level(&self) -> f32 {
             f32::from_bits(self.level.load(Ordering::Relaxed))
+        }
+
+        /// Current link state (LINK_* code) of the captured device.
+        pub fn link_state(&self) -> u8 {
+            self.link.load(Ordering::Relaxed)
+        }
+
+        /// The WASAPI device id this loopback captures — used to key the UI status.
+        pub fn device_id(&self) -> &str {
+            &self.device_id
         }
 
         /// Subscribe to an already-running capture. Returns `None` if not started.
@@ -216,9 +230,10 @@ pub mod platform {
             let format = self.format;
             let stop_flag = Arc::clone(&self.stop_flag);
             let level = Arc::clone(&self.level);
+            let link = Arc::clone(&self.link);
 
             std::thread::spawn(move || {
-                if let Err(e) = run_loopback_capture(device_id, format, stop_flag, tx, level) {
+                if let Err(e) = run_loopback_capture(device_id, format, stop_flag, tx, level, link) {
                     error!("loopback capture error: {e}");
                 }
             });
@@ -232,25 +247,77 @@ pub mod platform {
         }
     }
 
+    /// Self-healing device capture (loopback / input): a source device — a Bluetooth
+    /// mic, or a render endpoint captured as "system audio" — can vanish and return.
+    /// Re-open the WASAPI client on a recoverable error instead of letting the capture
+    /// thread die (which left a silent source until a manual engine restart). (t19)
     fn run_loopback_capture(
         device_id: String,
         format: AudioFormat,
         stop_flag: Arc<AtomicBool>,
         sender: tokio::sync::broadcast::Sender<AudioFrame>,
         level: Arc<std::sync::atomic::AtomicU32>,
+        link: Arc<std::sync::atomic::AtomicU8>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
+        let _com = ComGuard::init()?;
+
+        let mut tracker = LinkTracker::new();
+        loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            let opened = AtomicBool::new(false);
+            let ran = std::time::Instant::now();
+            match loopback_capture_session(
+                &device_id, format, &stop_flag, &sender, &level, &opened, &link,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(e) if is_recoverable(&e) => {
+                    if stop_flag.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
+                    tracker.note_failure(
+                        "capture",
+                        &device_id,
+                        &e,
+                        opened.load(Ordering::Relaxed),
+                        ran.elapsed(),
+                        &link,
+                    );
+                    // The device may need a moment to reappear as ACTIVE.
+                    std::thread::sleep(Duration::from_millis(400));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// One device-capture session — opens the client and pumps frames until stop or a
+    /// (recoverable) error. `opened`/`link` mirror the same online/offline signal the
+    /// render path uses, for the source node's status dot.
+    #[allow(clippy::too_many_arguments)]
+    fn loopback_capture_session(
+        device_id: &str,
+        format: AudioFormat,
+        stop_flag: &Arc<AtomicBool>,
+        sender: &tokio::sync::broadcast::Sender<AudioFrame>,
+        level: &Arc<std::sync::atomic::AtomicU32>,
+        opened: &AtomicBool,
+        link: &std::sync::atomic::AtomicU8,
+    ) -> Result<(), SessionError> {
         use windows::core::Interface;
         use windows::Win32::Media::Audio::{eRender, IMMEndpoint};
         use windows::Win32::System::Com::CoTaskMemFree;
-        let _com = ComGuard::init()?;
 
         unsafe {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .map_err(|e| SessionError::DeviceUnavailable(e.to_string()))?;
 
-            let device = get_device_by_id(&enumerator, &device_id)?;
+            let device = get_device_by_id(&enumerator, device_id)?;
 
             // Determine if this is an output (loopback) or input (direct capture) device
             let endpoint: IMMEndpoint = device
@@ -312,6 +379,8 @@ pub mod platform {
                 .Start()
                 .map_err(|e| SessionError::Wasapi(WasapiError::AudioClient(e.to_string())))?;
 
+            opened.store(true, Ordering::Relaxed);
+            link.store(LINK_ONLINE, Ordering::Relaxed);
             let mode = if is_output { "loopback" } else { "input" };
             debug!("capture ({mode}) started on device {device_id}");
 
@@ -359,9 +428,12 @@ pub mod platform {
                         }
                         std::thread::sleep(Duration::from_millis(BUFFER_DURATION_MS / 2));
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        // Device invalidated (removed / BT gone) — surface it so the
+                        // caller re-opens, instead of spinning here silently forever.
                         level.store(0u32, Ordering::Relaxed);
-                        std::thread::sleep(Duration::from_millis(BUFFER_DURATION_MS));
+                        client.Stop().ok();
+                        return Err(SessionError::Wasapi(WasapiError::Buffer(e.to_string())));
                     }
                 }
             }
@@ -1027,6 +1099,71 @@ pub mod platform {
         }
     }
 
+    /// Shared self-healing bookkeeping for render and capture threads: announces an
+    /// outage once, escalates reconnecting→offline after the grace window, and
+    /// mirrors the current state to a shared atomic for the per-node UI status dot.
+    struct LinkTracker {
+        phase: Option<LinkPhase>, // last announced state
+        ever_online: bool,
+        outage_since: Option<std::time::Instant>,
+    }
+
+    impl LinkTracker {
+        fn new() -> Self {
+            Self { phase: None, ever_online: false, outage_since: None }
+        }
+
+        /// Record one recoverable failure. `kind` = "render"/"capture" (for the log),
+        /// `opened` = did this attempt actually start streaming, `ran` = how long it
+        /// lasted. Logs only on state transitions; always updates the `link` atomic.
+        fn note_failure(
+            &mut self,
+            kind: &str,
+            device_id: &str,
+            e: &SessionError,
+            opened: bool,
+            ran: Duration,
+            link: &std::sync::atomic::AtomicU8,
+        ) {
+            if opened {
+                self.ever_online = true;
+                // Streamed a while then failed = a brand-new outage: forget the old one
+                // so a real drop is re-announced from scratch.
+                if ran > Duration::from_secs(1) {
+                    self.phase = None;
+                    self.outage_since = None;
+                }
+            }
+            let since = *self.outage_since.get_or_insert_with(std::time::Instant::now);
+            // Online-then-dropped within the grace window → reconnecting; grace elapsed,
+            // or it never came online → offline.
+            let want = if self.ever_online && since.elapsed() < RECONNECT_GRACE {
+                LinkPhase::Reconnecting
+            } else {
+                LinkPhase::Offline
+            };
+            if self.phase != Some(want) {
+                match want {
+                    LinkPhase::Reconnecting => {
+                        warn!("{kind} on {device_id} interrupted ({e}); reconnecting…")
+                    }
+                    LinkPhase::Offline if self.ever_online => warn!(
+                        "{kind} on {device_id} still down after {}s — marking offline",
+                        RECONNECT_GRACE.as_secs()
+                    ),
+                    // Never came online (e.g. BT still in the case at startup).
+                    LinkPhase::Offline => {
+                        debug!("{kind} {device_id} offline; waiting to come online")
+                    }
+                }
+                self.phase = Some(want);
+            }
+            // Reflect the current state to the UI on every error, not just on log
+            // transitions (a flapping link must not stay stuck showing "online").
+            link.store(want.code(), Ordering::Relaxed);
+        }
+    }
+
     /// Self-healing render: a Bluetooth sink (or any output) can vanish and come
     /// back, or the default device change. Instead of the thread dying — a silent
     /// route until a manual engine restart — re-open the WASAPI client on a
@@ -1050,12 +1187,10 @@ pub mod platform {
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
 
-        // Link state machine, announced on transitions only (not every 400ms retry).
-        // A stream that was playing and just dropped → "reconnecting"; after a long
-        // spell with no success — or a device that never came online at all → "offline".
-        let mut phase: Option<LinkPhase> = None; // last announced state
-        let mut ever_online = false;
-        let mut outage_since: Option<std::time::Instant> = None;
+        // Self-healing across re-opens: a stream that was playing and just dropped →
+        // "reconnecting"; after the grace window with no success — or a device that
+        // never came online at all → "offline". Logged on transitions only.
+        let mut tracker = LinkTracker::new();
         loop {
             if stop_flag.load(Ordering::SeqCst) {
                 return Ok(());
@@ -1072,46 +1207,14 @@ pub mod platform {
                         return Ok(());
                     }
                     level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
-
-                    if opened.load(Ordering::Relaxed) {
-                        ever_online = true;
-                        // Played a while then failed = a brand-new outage: forget the
-                        // previous one so a real drop is re-announced from scratch.
-                        if ran.elapsed() > Duration::from_secs(1) {
-                            phase = None;
-                            outage_since = None;
-                        }
-                    }
-                    let since = *outage_since.get_or_insert_with(std::time::Instant::now);
-
-                    // Online-then-dropped and still within the grace window → keep
-                    // trying (reconnecting). Otherwise (grace elapsed, or it never
-                    // came online) → offline.
-                    let want = if ever_online && since.elapsed() < RECONNECT_GRACE {
-                        LinkPhase::Reconnecting
-                    } else {
-                        LinkPhase::Offline
-                    };
-                    if phase != Some(want) {
-                        match want {
-                            LinkPhase::Reconnecting => {
-                                warn!("render on {device_id} interrupted ({e}); reconnecting…")
-                            }
-                            LinkPhase::Offline if ever_online => warn!(
-                                "render on {device_id} still down after {}s — marking offline",
-                                RECONNECT_GRACE.as_secs()
-                            ),
-                            // Never came online (e.g. BT still in the case at startup).
-                            LinkPhase::Offline => {
-                                debug!("render target {device_id} offline; waiting to come online")
-                            }
-                        }
-                        phase = Some(want);
-                    }
-                    // Reflect the current down-state to the UI on every error, not
-                    // just on log transitions (a flapping reconnect must not stay
-                    // stuck showing "online" from the last successful open).
-                    link.store(want.code(), Ordering::Relaxed);
+                    tracker.note_failure(
+                        "render",
+                        &device_id,
+                        &e,
+                        opened.load(Ordering::Relaxed),
+                        ran.elapsed(),
+                        &link,
+                    );
                     // The device (e.g. BT) may need a moment to reappear as ACTIVE.
                     std::thread::sleep(Duration::from_millis(400));
                     continue;
@@ -1361,6 +1464,10 @@ pub mod platform {
         }
 
         pub fn current_level(&self) -> f32 { 0.0 }
+
+        pub fn link_state(&self) -> u8 { LINK_ONLINE }
+
+        pub fn device_id(&self) -> &str { &self.device_id }
 
         pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<AudioFrame>> {
             self.sender.as_ref().map(|s| s.subscribe())
