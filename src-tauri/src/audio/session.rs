@@ -677,17 +677,24 @@ pub mod platform {
         }
     }
 
-    /// Is this PID still a live process? A closed app → re-resolve by exe. (t19)
+    /// Is this PID still a RUNNING process? A closed app → re-resolve by exe. (t19)
+    /// NB: `OpenProcess` succeeds even for a process that has already EXITED (its
+    /// object lingers until all handles close), so it can't tell alive from dead —
+    /// we must check whether the process object has signaled via a zero-timeout
+    /// wait: WAIT_TIMEOUT = still running, WAIT_OBJECT_0 = exited.
     fn pid_alive(pid: u32) -> bool {
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+        use windows::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
         unsafe {
-            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            match OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
                 Ok(h) => {
+                    let alive = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
                     let _ = CloseHandle(h);
-                    true
+                    alive
                 }
-                Err(_) => false,
+                Err(_) => false, // can't open → gone
             }
         }
     }
