@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::{trace, warn};
 
 /// Lock a mutex, recovering the guard even if a previous holder panicked.
 /// Project rule: no `.unwrap()` in production code — a poisoned mutex must not
@@ -213,7 +213,9 @@ mod platform {
                         Some((d, t)) => (d.to_string(), t),
                         None => (pretty_exe_name(&exe_name), SourceType::Unknown),
                     };
-                    debug!("detected audio process: {exe_name} (pid {pid}, session={})",
+                    // trace, not debug: this fires for every process every scan
+                    // (~2s) and drowns the log; enable with RUST_LOG=…nodus=trace.
+                    trace!("detected audio process: {exe_name} (pid {pid}, session={})",
                         audio_pids.contains(&pid));
                     seen.insert(
                         key,
