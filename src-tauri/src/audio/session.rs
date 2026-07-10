@@ -507,7 +507,12 @@ pub mod platform {
     /// Find the PID of a running process (by exe name) that currently has an active
     /// render audio session — the one actually producing sound. Process loopback then
     /// targets that PID's process tree, so we capture only this app's audio.
-    pub fn find_audio_pid_for_exe(exe_name: &str) -> Result<u32, SessionError> {
+    ///
+    /// `require_active`: if true, ONLY return a PID that has an active render session
+    /// (else Err) — used for recovery, where grabbing an arbitrary PID of a
+    /// multi-process app (Spotify/Chrome) that isn't the audio one captures nothing
+    /// (the flaky "reopened but no sound" case). If false, fall back to any PID.
+    pub fn find_audio_pid_for_exe(exe_name: &str, require_active: bool) -> Result<u32, SessionError> {
         use crate::audio::wasapi::ComGuard;
         use std::collections::HashSet;
         use windows::core::Interface;
@@ -589,8 +594,17 @@ pub mod platform {
                     }
                 }
             }
-            // No active session yet (app not currently playing) — target any PID;
-            // INCLUDE_TARGET_PROCESS_TREE picks up audio once it starts.
+            // No active session yet (app running but not producing sound). For
+            // recovery we must NOT guess a PID — an arbitrary process of a
+            // multi-process app often isn't the audio tree, so the capture stays
+            // silent. Wait for a real session instead.
+            if require_active {
+                return Err(SessionError::DeviceUnavailable(format!(
+                    "{exe_name} running but no active audio session yet"
+                )));
+            }
+            // Initial wiring: target any PID; INCLUDE_TARGET_PROCESS_TREE picks up
+            // audio once it starts.
             match pids.iter().next() {
                 Some(&p) => Ok(p),
                 None => Err(SessionError::DeviceUnavailable(format!("no pid for {exe_name}"))),
@@ -708,12 +722,14 @@ pub mod platform {
                     };
                     warn!("process capture (pid {pid}) lost ({e}); re-resolving '{exe}'…");
                     level.store(0, Ordering::Relaxed);
-                    // Wait for the app to be running again with an audio session.
+                    // Wait for the app to be back AND actually producing sound
+                    // (require_active) — grabbing an arbitrary PID of a reopened
+                    // multi-process app captured nothing (the flaky recovery).
                     loop {
                         if stop_flag.load(Ordering::SeqCst) {
                             return Ok(());
                         }
-                        match find_audio_pid_for_exe(exe) {
+                        match find_audio_pid_for_exe(exe, true) {
                             Ok(np) => {
                                 pid = np;
                                 break;
@@ -1196,7 +1212,7 @@ pub mod platform {
         Err(SessionError::DeviceUnavailable("process loopback not supported on non-Windows".into()))
     }
 
-    pub fn find_audio_pid_for_exe(_exe_name: &str) -> Result<u32, SessionError> {
+    pub fn find_audio_pid_for_exe(_exe_name: &str, _require_active: bool) -> Result<u32, SessionError> {
         Err(SessionError::DeviceUnavailable("process loopback not supported on non-Windows".into()))
     }
 

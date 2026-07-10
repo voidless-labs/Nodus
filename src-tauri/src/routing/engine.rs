@@ -389,7 +389,7 @@ impl RoutingEngine {
             Device,
         }
         let (capture_key, backend) = if let Some(ref exe) = ar.exe_name {
-            match find_audio_pid_for_exe(exe) {
+            match find_audio_pid_for_exe(exe, false) {
                 Ok(pid) => {
                     debug!("resolved {exe} → pid {pid} (process loopback)");
                     (format!("exe:{exe}"), Backend::Process(pid))
