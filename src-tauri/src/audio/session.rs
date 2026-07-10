@@ -985,6 +985,20 @@ pub mod platform {
         }
     }
 
+    /// How long a dropped-but-previously-playing device stays in "reconnecting"
+    /// before we give up and call it "offline". Generous — a BT sink taken out of
+    /// the case and put in the ear can take several seconds to re-appear as ACTIVE.
+    const RECONNECT_GRACE: Duration = Duration::from_secs(15);
+
+    /// Link state of a render target, as reported to the log (and, later, the UI).
+    #[derive(Clone, Copy, PartialEq)]
+    enum LinkPhase {
+        /// Was playing, just dropped — actively retrying to re-open.
+        Reconnecting,
+        /// Never came online, or reconnect gave up — the device just isn't there.
+        Offline,
+    }
+
     /// Self-healing render: a Bluetooth sink (or any output) can vanish and come
     /// back, or the default device change. Instead of the thread dying — a silent
     /// route until a manual engine restart — re-open the WASAPI client on a
@@ -1007,16 +1021,18 @@ pub mod platform {
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
 
-        // Announce the current problem ONCE, not on every 400ms retry. A device
-        // that never came online (BT in the case) is "offline; waiting" — NOT a
-        // dropout. A stream that ran and then failed is a real "interrupted".
-        let mut announced = false;
+        // Link state machine, announced on transitions only (not every 400ms retry).
+        // A stream that was playing and just dropped → "reconnecting"; after a long
+        // spell with no success — or a device that never came online at all → "offline".
+        let mut phase: Option<LinkPhase> = None; // last announced state
+        let mut ever_online = false;
+        let mut outage_since: Option<std::time::Instant> = None;
         loop {
             if stop_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
             let opened = AtomicBool::new(false);
-            let started = std::time::Instant::now();
+            let ran = std::time::Instant::now();
             match render_session(
                 &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic,
                 &level, &opened,
@@ -1027,20 +1043,41 @@ pub mod platform {
                         return Ok(());
                     }
                     level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
-                    let was_playing = opened.load(Ordering::Relaxed);
-                    // A stream that played for a bit and then failed = a fresh
-                    // outage → re-announce next time it recovers.
-                    if was_playing && started.elapsed() > Duration::from_secs(1) {
-                        announced = false;
-                    }
-                    if !announced {
-                        if was_playing {
-                            warn!("render on {device_id} interrupted ({e}); reconnecting…");
-                        } else {
-                            // Device isn't present yet (e.g. BT still in the case).
-                            debug!("render target {device_id} offline; waiting to come online");
+
+                    if opened.load(Ordering::Relaxed) {
+                        ever_online = true;
+                        // Played a while then failed = a brand-new outage: forget the
+                        // previous one so a real drop is re-announced from scratch.
+                        if ran.elapsed() > Duration::from_secs(1) {
+                            phase = None;
+                            outage_since = None;
                         }
-                        announced = true;
+                    }
+                    let since = *outage_since.get_or_insert_with(std::time::Instant::now);
+
+                    // Online-then-dropped and still within the grace window → keep
+                    // trying (reconnecting). Otherwise (grace elapsed, or it never
+                    // came online) → offline.
+                    let want = if ever_online && since.elapsed() < RECONNECT_GRACE {
+                        LinkPhase::Reconnecting
+                    } else {
+                        LinkPhase::Offline
+                    };
+                    if phase != Some(want) {
+                        match want {
+                            LinkPhase::Reconnecting => {
+                                warn!("render on {device_id} interrupted ({e}); reconnecting…")
+                            }
+                            LinkPhase::Offline if ever_online => warn!(
+                                "render on {device_id} still down after {}s — marking offline",
+                                RECONNECT_GRACE.as_secs()
+                            ),
+                            // Never came online (e.g. BT still in the case at startup).
+                            LinkPhase::Offline => {
+                                debug!("render target {device_id} offline; waiting to come online")
+                            }
+                        }
+                        phase = Some(want);
                     }
                     // The device (e.g. BT) may need a moment to reappear as ACTIVE.
                     std::thread::sleep(Duration::from_millis(400));
