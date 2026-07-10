@@ -1007,32 +1007,41 @@ pub mod platform {
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
 
-        // Announce an outage ONCE, not on every 400ms retry (a device with many
-        // routes has one render thread each — all retry together and would spam).
+        // Announce the current problem ONCE, not on every 400ms retry. A device
+        // that never came online (BT in the case) is "offline; waiting" — NOT a
+        // dropout. A stream that ran and then failed is a real "interrupted".
         let mut announced = false;
         loop {
             if stop_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
+            let opened = AtomicBool::new(false);
             let started = std::time::Instant::now();
             match render_session(
-                &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic, &level,
+                &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic,
+                &level, &opened,
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_recoverable(&e) => {
                     if stop_flag.load(Ordering::SeqCst) {
                         return Ok(());
                     }
-                    // Ran a while then failed = a fresh outage (re-announce); a quick
-                    // failure = the device is still gone (quiet retry).
-                    if started.elapsed() > Duration::from_secs(2) {
+                    level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
+                    let was_playing = opened.load(Ordering::Relaxed);
+                    // A stream that played for a bit and then failed = a fresh
+                    // outage → re-announce next time it recovers.
+                    if was_playing && started.elapsed() > Duration::from_secs(1) {
                         announced = false;
                     }
                     if !announced {
-                        warn!("render on {device_id} interrupted ({e}); reconnecting…");
+                        if was_playing {
+                            warn!("render on {device_id} interrupted ({e}); reconnecting…");
+                        } else {
+                            // Device isn't present yet (e.g. BT still in the case).
+                            debug!("render target {device_id} offline; waiting to come online");
+                        }
                         announced = true;
                     }
-                    level.store(0, Ordering::Relaxed); // meter drops → "disconnected"
                     // The device (e.g. BT) may need a moment to reappear as ACTIVE.
                     std::thread::sleep(Duration::from_millis(400));
                     continue;
@@ -1053,6 +1062,9 @@ pub mod platform {
         muted: &Arc<AtomicBool>,
         pan_atomic: &Arc<std::sync::atomic::AtomicU32>,
         level: &Arc<std::sync::atomic::AtomicU32>,
+        // Set true once the stream actually starts — lets the caller tell a real
+        // dropout (was playing) from a device that never came online (in-case).
+        opened: &AtomicBool,
     ) -> Result<(), SessionError> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
@@ -1110,6 +1122,7 @@ pub mod platform {
                 .Start()
                 .map_err(|e| SessionError::Wasapi(WasapiError::AudioClient(e.to_string())))?;
 
+            opened.store(true, Ordering::Relaxed);
             debug!("render started on device {device_id}");
 
             // When the last frame arrived — the VU decays only after a real silence
