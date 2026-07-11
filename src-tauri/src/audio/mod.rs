@@ -2,5 +2,6 @@
 //! capture/render sessions. (Nodus's own virtual devices live in `virtual_audio`.)
 
 pub mod devices;
+pub mod dsp;
 pub mod session;
 pub mod wasapi;
