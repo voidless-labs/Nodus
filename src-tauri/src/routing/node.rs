@@ -12,6 +12,38 @@ pub enum NodeType {
     Splitter,
     Mixer,
     Virtual,
+    /// An effect on the route: passes audio through but applies DSP (t18).
+    Fx,
+}
+
+/// Which effect an Fx node applies (t18, Wave 1). Extensible: compressor/limiter/…
+/// land in later waves without changing the contract shape.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FxKind {
+    Gain,
+    Gate,
+    Eq,
+}
+
+/// FX parameters, flat + named so UI and engine share one shape. Fields are used
+/// per `kind` (unused ones stay at default): gain_db (gain/eq), open_db/close_db
+/// (gate), freq/q (eq). `bypassed` = pass through untouched (manual, or solo-skip).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FxSpec {
+    pub kind: FxKind,
+    #[serde(default)]
+    pub bypassed: bool,
+    #[serde(default)]
+    pub gain_db: f32,
+    #[serde(default)]
+    pub open_db: f32,
+    #[serde(default)]
+    pub close_db: f32,
+    #[serde(default)]
+    pub freq: f32,
+    #[serde(default)]
+    pub q: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,11 +52,14 @@ pub struct Node {
     pub node_type: NodeType,
     /// Human-readable label (e.g. "Arma 3", "Headphones")
     pub label: String,
-    /// Device ID as returned by WASAPI (empty for Splitter/Mixer and app-capture sources)
+    /// Device ID as returned by WASAPI (empty for Splitter/Mixer/Fx and app-capture sources)
     pub device_id: String,
     /// Exe name for app-capture sources (e.g. "spotify.exe"). Mutually exclusive with device_id.
     #[serde(default)]
     pub exe_name: Option<String>,
+    /// FX settings — present only on `Fx` nodes (t18).
+    #[serde(default)]
+    pub fx: Option<FxSpec>,
 }
 
 impl Node {
@@ -35,6 +70,7 @@ impl Node {
             label: label.into(),
             device_id: device_id.into(),
             exe_name: None,
+            fx: None,
         }
     }
 }

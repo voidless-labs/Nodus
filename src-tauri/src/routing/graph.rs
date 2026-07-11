@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::node::{Node, NodeId, NodeType, Route, RouteId};
+use super::node::{FxSpec, Node, NodeId, NodeType, Route, RouteId};
 
 #[derive(Debug, Error)]
 pub enum GraphError {
@@ -251,10 +251,20 @@ impl Graph {
     }
 }
 
+/// One FX node on a resolved route, in signal order (source→…→output). Carries the
+/// node id (so the engine keys live params by it) and the current settings. (t18)
+#[derive(Debug, Clone)]
+pub struct FxInstance {
+    pub node_id: NodeId,
+    pub spec: FxSpec,
+}
+
 /// Active routes visible to the engine: flattened list of (from_device_id, to_device_id, volume, muted).
 #[derive(Debug, Clone)]
 pub struct ActiveRoute {
     pub route_id: RouteId,
+    /// FX nodes traversed source→…→output, in order — applied in the render chain (t18).
+    pub fx_chain: Vec<FxInstance>,
     /// Every edge id traversed source→…→output for this physical route. The
     /// effective volume is the product of these edges' volumes; the engine
     /// recomputes it live when ANY edge in the chain changes (so a Mixer-input
@@ -300,6 +310,7 @@ impl Graph {
                     1.0,
                     false,
                     Vec::new(),
+                    Vec::new(),
                     &mut result,
                     0,
                 );
@@ -318,6 +329,7 @@ impl Graph {
         inherited_volume: f32,
         inherited_mute: bool,
         chain: Vec<RouteId>,
+        fx_chain: Vec<FxInstance>,
         out: &mut Vec<ActiveRoute>,
         depth: usize,
     ) {
@@ -336,6 +348,7 @@ impl Graph {
                         if !dest.device_id.is_empty() {
                             out.push(ActiveRoute {
                                 route_id: route.id.clone(),
+                                fx_chain: fx_chain.clone(),
                                 chain: chain.clone(),
                                 from_device_id: source_device.to_string(),
                                 exe_name: source_exe.clone(),
@@ -360,6 +373,27 @@ impl Graph {
                             volume,
                             muted,
                             chain.clone(),
+                            fx_chain.clone(),
+                            out,
+                            depth + 1,
+                        );
+                    }
+                    NodeType::Fx => {
+                        // Pass through, but record the FX (in signal order) so the
+                        // engine applies its DSP on the buffer flowing through here.
+                        let mut fx_chain = fx_chain.clone();
+                        if let Some(spec) = dest.fx {
+                            fx_chain.push(FxInstance { node_id: dest.id.clone(), spec });
+                        }
+                        self.collect_device_routes(
+                            &dest.id,
+                            source_device,
+                            source_exe.clone(),
+                            source_is_virtual,
+                            volume,
+                            muted,
+                            chain.clone(),
+                            fx_chain,
                             out,
                             depth + 1,
                         );
@@ -569,6 +603,51 @@ mod tests {
                 other => panic!("unexpected destination {other}"),
             }
         }
+    }
+
+    #[test]
+    fn resolve_collects_fx_chain_in_order() {
+        use crate::routing::node::{FxKind, FxSpec};
+        // Source → EQ → Gain → Output. The route must carry both FX in signal order.
+        let mut g = Graph::new();
+        let src = make_node(NodeType::Source, "src-dev");
+        let mut eq = Node::new(NodeType::Fx, "EQ", "");
+        eq.fx = Some(FxSpec {
+            kind: FxKind::Eq,
+            bypassed: false,
+            gain_db: 6.0,
+            open_db: 0.0,
+            close_db: 0.0,
+            freq: 1000.0,
+            q: 1.0,
+        });
+        let mut gain = Node::new(NodeType::Fx, "Gain", "");
+        gain.fx = Some(FxSpec {
+            kind: FxKind::Gain,
+            bypassed: false,
+            gain_db: -3.0,
+            open_db: 0.0,
+            close_db: 0.0,
+            freq: 0.0,
+            q: 0.0,
+        });
+        let out = make_node(NodeType::Output, "out-dev");
+        let (sid, eid, gid, oid) =
+            (src.id.clone(), eq.id.clone(), gain.id.clone(), out.id.clone());
+        g.add_node(src);
+        g.add_node(eq);
+        g.add_node(gain);
+        g.add_node(out);
+        g.add_route(Route::new(sid, eid.clone())).unwrap();
+        g.add_route(Route::new(eid, gid.clone())).unwrap();
+        g.add_route(Route::new(gid, oid)).unwrap();
+
+        let routes = g.resolve_device_routes();
+        assert_eq!(routes.len(), 1);
+        let fx = &routes[0].fx_chain;
+        assert_eq!(fx.len(), 2, "both FX collected");
+        assert_eq!(fx[0].spec.kind, FxKind::Eq, "EQ first (upstream)");
+        assert_eq!(fx[1].spec.kind, FxKind::Gain, "Gain second (downstream)");
     }
 
     #[test]
