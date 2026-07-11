@@ -28,6 +28,7 @@ export function NodeCard({
   actions,
   status,
   chainState,
+  soloSkipped,
   onVolume,
   onMute,
   onSolo,
@@ -45,6 +46,8 @@ export function NodeCard({
   status?: LinkStatus;
   /** Solo-chain highlight: 'on' = in the audible chain, 'off' = dimmed by solo. */
   chainState?: 'on' | 'off';
+  /** FX node below the solo listening point → its effect is bypassed while solo. */
+  soloSkipped?: boolean;
   onVolume?: (id: string, volume: number) => void;
   onMute?: (id: string) => void;
   onSolo?: (id: string) => void;
@@ -84,6 +87,7 @@ export function NodeCard({
     search === 'dim' ? 'is-search-dim' : '',
     chainState === 'on' ? 'is-solo-on' : '',
     chainState === 'off' ? 'is-solo-off' : '',
+    soloSkipped ? 'is-solo-skipped' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -99,6 +103,11 @@ export function NodeCard({
         {kindLabel(node.kind, node.micSink)}
         {node.solo && <span className="node-solo-tag">solo</span>}
         {pinned && <span className="node-pin-tag">pinned</span>}
+        {soloSkipped && (
+          <span className="node-skip-tag" title="effect bypassed while solo is active">
+            skipped
+          </span>
+        )}
         {status && <span className={`node-link node-link--${status}`}>{status}</span>}
       </div>
 

@@ -40,18 +40,22 @@ function soloTriggers(scene: GraphLike): string[] {
 }
 
 /**
- * The "solo chain": when a node is soloed you audition the chain THROUGH it —
- * everything upstream (what feeds it) and downstream (where it goes, so the signal
- * still reaches an output). Returns the set of node ids to keep audible (empty when
- * nothing is soloed). A route plays iff BOTH endpoints are in this set; multiple
- * soloed nodes union their chains. Splitter/logic never trigger it (but are still
- * traversed as intermediate nodes). Same helper drives the engine mute + the UI
- * chain highlight, so they can never disagree.
+ * Solo sets for auditioning the chain THROUGH the soloed node(s). The soloed node
+ * is the LISTENING POINT: you hear the signal exactly as it is there.
+ *  - `applied` = the soloed node(s) + everything UPSTREAM (ancestors). These are
+ *    already "printed" into the signal you hear, so their FX are applied.
+ *  - `chain`   = `applied` + everything DOWNSTREAM (descendants) — needed so the
+ *    signal still reaches an output. A route plays iff BOTH endpoints ∈ chain.
+ * An FX node that is in `chain` but NOT in `applied` sits below the listening point,
+ * so its effect is bypassed while solo is on ("skipped by solo"). Multiple solos
+ * union their sets. Splitter/logic never trigger solo (but are traversed).
+ * Same helper drives the engine mute AND the UI highlight/skip tags — never disagree.
  */
-export function soloChainNodes(scene: GraphLike): Set<string> {
+export function soloSets(scene: GraphLike): { chain: Set<string>; applied: Set<string> } {
   const triggers = soloTriggers(scene);
   const chain = new Set<string>();
-  if (triggers.length === 0) return chain;
+  const applied = new Set<string>();
+  if (triggers.length === 0) return { chain, applied };
 
   const push = (m: Map<string, string[]>, k: string, v: string) => {
     const a = m.get(k);
@@ -64,22 +68,28 @@ export function soloChainNodes(scene: GraphLike): Set<string> {
     push(fwd, e.from, e.to);
     push(rev, e.to, e.from);
   }
-  const walk = (start: string, adj: Map<string, string[]>) => {
+  const walk = (start: string, adj: Map<string, string[]>, into: Set<string>) => {
     const stack = [start];
     const visited = new Set<string>();
     while (stack.length) {
       const cur = stack.pop()!;
       if (visited.has(cur)) continue;
       visited.add(cur);
-      chain.add(cur);
+      into.add(cur);
       for (const next of adj.get(cur) ?? []) if (!visited.has(next)) stack.push(next);
     }
   };
   for (const t of triggers) {
-    walk(t, rev); // ancestors + self
-    walk(t, fwd); // descendants + self
+    walk(t, rev, applied); // ancestors + self → FX here are applied
+    walk(t, fwd, chain); // descendants + self → routed onward
   }
-  return chain;
+  for (const a of applied) chain.add(a); // applied ⊆ chain
+  return { chain, applied };
+}
+
+/** Just the audible-chain set (engine route mute). See soloSets. */
+export function soloChainNodes(scene: GraphLike): Set<string> {
+  return soloSets(scene).chain;
 }
 
 export function buildRoutingGraph(scene: Scene): RoutingGraph {

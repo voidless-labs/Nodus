@@ -5,7 +5,7 @@ import { HubNode } from '@/features/nodes/ui/HubNode';
 import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
 import type { EdgeModel, HubModel, LinkStatus, NodeModel } from '@/features/nodes/types';
 import { LINK_OFFLINE, LINK_ONLINE, LINK_RECONNECTING } from '@/shared/bridge';
-import { soloChainNodes } from '@/features/nodes/routingGraph';
+import { soloSets } from '@/features/nodes/routingGraph';
 import type { View } from '@/shared/hooks/useView';
 
 /** Live connection status of a source/output node, from the engine's live data.
@@ -449,16 +449,22 @@ export function Graph({
   // The lone selected node gets the action toolbar (R20). 2+ → SelectionBar.
   const soleSelected = selection.size === 1 ? selection.values().next().value : null;
 
-  // Solo chain highlight (t: solo redesign): the same cone the engine mutes by, so
-  // the audible path lights up and everything outside it dims. Empty ⇒ no solo.
-  const soloChain = useMemo(
-    () => soloChainNodes({ nodes, hubs, edges }),
+  // Solo highlight: same sets the engine mutes/bypasses by, so UI can't disagree.
+  //  - chain: audible path (lights up); outside ⇒ dimmed.
+  //  - applied: chain nodes at/above the listening point → their FX are applied;
+  //    an FX in chain but NOT applied is bypassed → "skipped by solo" tag.
+  const { chain: soloChain, applied: soloApplied } = useMemo(
+    () => soloSets({ nodes, hubs, edges }),
     [nodes, hubs, edges],
   );
   const anySolo = soloChain.size > 0;
   // 'on' = part of the audible chain, 'off' = dimmed (muted by solo), undefined = no solo.
   const chainState = (id: string): 'on' | 'off' | undefined =>
     anySolo ? (soloChain.has(id) ? 'on' : 'off') : undefined;
+  // An FX node downstream of the listening point: routed through, but its effect is
+  // bypassed while solo is active (real DSP bypass lands with t18; tag informs now).
+  const isSoloSkipped = (n: NodeModel): boolean =>
+    anySolo && n.kind === 'fx' && soloChain.has(n.id) && !soloApplied.has(n.id);
 
   // Selected wire midpoint, projected world→screen for the (unscaled) popover.
   const selected = selectedEdge ? edges.find((x) => x.id === selectedEdge) : undefined;
@@ -545,6 +551,7 @@ export function Graph({
               search={searchFor(n.name, search)}
               actions={n.id === soleSelected}
               chainState={chainState(n.id)}
+              soloSkipped={isSoloSkipped(n)}
               onVolume={onNodeVolume}
               onMute={onNodeMute}
               onSolo={

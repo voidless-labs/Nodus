@@ -95,6 +95,23 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent),
     var(--shadow-node);
 }
+/* FX below the listening point: routed through, but its effect is bypassed by solo.
+   Still on-chain, so shown — but a dashed, muted border says "not applied now". */
+.node.is-solo-skipped .node-card {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-text-secondary) 45%, var(--color-node-border));
+  box-shadow: var(--shadow-node);
+}
+.node-skip-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-text-secondary) 14%, transparent);
+}
 
 /* ── Pinned marker on the label (mirrors the solo tag; t24-C) ── */
 .node-pin-tag {
