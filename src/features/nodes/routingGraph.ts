@@ -11,7 +11,7 @@
  * This file is pure (no React, no Tauri) so it can be unit-tested and reused by
  * both "apply on engine start" and the live re-apply path.
  */
-import type { BackendNode, BackendNodeType, RoutingGraph } from '@/shared/bridge';
+import type { BackendNode, BackendNodeType, FxSpec, RoutingGraph } from '@/shared/bridge';
 import type { EdgeModel, HubModel, NodeModel } from '@/features/nodes/types';
 import type { Scene } from '@/features/nodes/scenes';
 
@@ -101,20 +101,38 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
   hubs.forEach((h) => byId.set(h.id, h));
 
   // Solo = audition the chain(s) through the soloed node(s). Anything outside the
-  // chain is muted. Same helper feeds the UI highlight (see soloChainNodes).
-  const chain = soloChainNodes(scene);
+  // chain is muted; an FX in the chain but below the listening point (not in
+  // `applied`) is bypassed — the engine skips its DSP. (t18 + solo)
+  const { chain, applied } = soloSets(scene);
   const anySolo = chain.size > 0;
 
   // ── Nodes ────────────────────────────────────────────────────────────────
   const backendNodes: BackendNode[] = [];
   const included = new Set<string>();
 
+  // A UI 'fx' node maps to a real backend 'fx' node ONLY if its effect has DSP
+  // (Wave 1: gain/gate/eq). Others (comp/limiter/duck — Wave 2) pass through as a
+  // mixer until their DSP lands, so the wire still carries audio.
+  const fxDsp = (n: NodeModel): FxSpec | undefined => {
+    const k = n.fx?.kind;
+    return k === 'gain' || k === 'gate' || k === 'eq' ? n.fx : undefined;
+  };
+
   for (const n of nodes) {
-    const type = BACKEND_TYPE[n.kind];
+    const fx = fxDsp(n);
+    const type: BackendNodeType | null =
+      n.kind === 'fx' ? (fx ? 'fx' : 'mixer') : BACKEND_TYPE[n.kind];
     if (!type) continue; // logic/control nodes carry no audio
+    // Solo bypass: an FX below the listening point is auditioned-through but its
+    // effect is skipped → send it bypassed so the engine doesn't apply the DSP.
+    const soloSkipped = anySolo && chain.has(n.id) && !applied.has(n.id);
+    const fxOut: FxSpec | undefined = fx
+      ? { ...fx, bypassed: !!fx.bypassed || soloSkipped }
+      : undefined;
     backendNodes.push({
       id: n.id,
       node_type: type,
+      fx: fxOut ?? null,
       // The engine flags the Nodus mic destination by matching this label
       // (is_nodus_virtual_mic_name → writes into the kernel mic ring). deviceNode
       // strips the "(Nodus …)" suffix from the display name, so a mic-sink node's

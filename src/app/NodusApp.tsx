@@ -486,6 +486,7 @@ export default function NodusApp() {
               onEdgeVolume={store.setEdgeVolume}
               onEdgeMute={store.setEdgeMute}
               onEdgePan={store.setEdgePan}
+              onFxParams={store.setNodeFx}
               onRemoveEdge={store.removeEdge}
               onRemoveHubInput={store.removeHubInput}
               onHubInputVolume={store.setHubInputVolume}

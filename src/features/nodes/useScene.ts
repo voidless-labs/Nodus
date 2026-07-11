@@ -4,6 +4,7 @@ import {
   setRouteMute as bridgeSetRouteMute,
   setRoutePan as bridgeSetRoutePan,
   setRouteVolume as bridgeSetRouteVolume,
+  setFxParams as bridgeSetFxParams,
   getScene,
   isDaemon,
   isTauri,
@@ -11,6 +12,7 @@ import {
   pushScene,
   type AudioDevice,
   type AudioProcess,
+  type FxSpec,
   type SceneSnapshot,
 } from '@/shared/bridge';
 import { buildRoutingGraph } from '@/features/nodes/routingGraph';
@@ -126,6 +128,21 @@ const CATALOG: Record<string, CatalogSpec> = {
   trigger: { kind: 'logic', name: 'Push-to-Talk', subtitle: 'hold a key', hasInput: false, hasOutput: true },
 };
 
+/** Default FX params for a catalog FX type (t18, Wave 1). comp/limiter/duck have no
+ *  DSP yet → undefined (node passes through until Wave 2). */
+function defaultFxSpec(typeId: string): NodeModel['fx'] | undefined {
+  switch (typeId) {
+    case 'gain':
+      return { kind: 'gain', bypassed: false, gain_db: 0 };
+    case 'gate':
+      return { kind: 'gate', bypassed: false, open_db: -45, close_db: -55 };
+    case 'eq':
+      return { kind: 'eq', bypassed: false, freq: 1000, q: 1, gain_db: 0 };
+    default:
+      return undefined;
+  }
+}
+
 /** Build a node (or a hub for `mixer`) of a catalog type at `pos`. */
 function nodeFromType(typeId: string, pos: Pos): { node?: NodeModel; hub?: HubModel } {
   if (typeId === 'mixer') {
@@ -170,6 +187,7 @@ function nodeFromType(typeId: string, pos: Pos): { node?: NodeModel; hub?: HubMo
       active: true,
       hasInput: spec.hasInput,
       hasOutput: spec.hasOutput,
+      ...(spec.kind === 'fx' ? { fx: defaultFxSpec(typeId) } : null),
       ...pos,
     },
   };
@@ -233,6 +251,7 @@ export interface SceneStore {
   setEdgeVolume: (id: string, volume: number) => void;
   setEdgeMute: (id: string, muted: boolean) => void;
   setEdgePan: (id: string, pan: number) => void;
+  setNodeFx: (id: string, fx: FxSpec) => void;
   /** Add an input port to a hub / remove one (R24 dynamic ports). */
   addHubInput: (hubId: string) => void;
   removeHubInput: (hubId: string, inputId: string) => void;
@@ -819,6 +838,16 @@ export function useScene(live: boolean): SceneStore {
     },
     [patchEdges],
   );
+  // FX inspector → live to the engine (params only; no re-apply, like the sliders).
+  // The node keeps the spec so it persists + mirrors (t17); set_fx_params updates the
+  // running renderers in place. Bypass toggling is a param too → also live. (t18)
+  const setNodeFx = useCallback(
+    (id: string, fx: FxSpec) => {
+      patchNodes((ns) => ns.map((n) => (n.id === id ? { ...n, fx } : n)));
+      void bridgeSetFxParams(id, fx).catch((e) => console.error('set_fx_params:', e));
+    },
+    [patchNodes],
+  );
 
   // ── Dynamic hub inputs (R24) ───────────────────────────────────────────
   // Auto-grow: dragging a source onto a hub's trailing "ghost" port materialises
@@ -997,6 +1026,7 @@ export function useScene(live: boolean): SceneStore {
       setEdgeVolume,
       setEdgeMute,
       setEdgePan,
+      setNodeFx,
       addHubInput,
       removeHubInput,
       setHubInputVolume,
@@ -1043,6 +1073,7 @@ export function useScene(live: boolean): SceneStore {
       setEdgeVolume,
       setEdgeMute,
       setEdgePan,
+      setNodeFx,
       addHubInput,
       removeHubInput,
       setHubInputVolume,

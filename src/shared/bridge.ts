@@ -45,7 +45,22 @@ export interface AudioProcess {
   icon?: string | null;
 }
 
-export type BackendNodeType = 'source' | 'output' | 'splitter' | 'mixer' | 'virtual';
+export type BackendNodeType = 'source' | 'output' | 'splitter' | 'mixer' | 'virtual' | 'fx';
+
+/** Which effect an Fx node applies (t18, Wave 1). Matches Rust FxKind. */
+export type FxKind = 'gain' | 'gate' | 'eq';
+
+/** FX parameters — flat + named, shared shape with Rust FxSpec. Fields used per
+ *  kind: gain_db (gain/eq), open_db/close_db (gate), freq/q (eq). */
+export interface FxSpec {
+  kind: FxKind;
+  bypassed?: boolean;
+  gain_db?: number;
+  open_db?: number;
+  close_db?: number;
+  freq?: number;
+  q?: number;
+}
 
 export interface BackendNode {
   id: string;
@@ -53,6 +68,8 @@ export interface BackendNode {
   label: string;
   device_id: string;
   exe_name?: string | null;
+  /** Present only on `fx` nodes (t18). */
+  fx?: FxSpec | null;
 }
 
 export interface BackendRoute {
@@ -317,6 +334,12 @@ export function setRouteVolume(routeId: string, volume: number): Promise<unknown
 
 export function setRoutePan(routeId: string, pan: number): Promise<unknown> {
   return call('set_route_pan', { routeId, route_id: routeId, pan });
+}
+
+/** Live-update an FX node's parameters (like setRouteVolume). Both key casings sent
+ *  so the Tauri `node_id` arg matches (t16 lesson). No-op if node isn't live. (t18) */
+export function setFxParams(nodeId: string, spec: FxSpec): Promise<unknown> {
+  return call('set_fx_params', { nodeId, node_id: nodeId, spec });
 }
 
 export function startEngine(): Promise<unknown> {

@@ -3,6 +3,8 @@ import './Graph.css';
 import { NodeCard } from '@/features/nodes/ui/NodeCard';
 import { HubNode } from '@/features/nodes/ui/HubNode';
 import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
+import { FxPopover } from '@/features/nodes/ui/FxPopover';
+import type { FxSpec } from '@/shared/bridge';
 import type { EdgeModel, HubModel, LinkStatus, NodeModel } from '@/features/nodes/types';
 import { LINK_OFFLINE, LINK_ONLINE, LINK_RECONNECTING } from '@/shared/bridge';
 import { soloSets } from '@/features/nodes/routingGraph';
@@ -91,6 +93,7 @@ export function Graph({
   onEdgeVolume,
   onEdgeMute,
   onEdgePan,
+  onFxParams,
   onRemoveEdge,
   onRemoveHubInput,
   onHubInputVolume,
@@ -133,6 +136,8 @@ export function Graph({
   onEdgeVolume?: (id: string, volume: number) => void;
   onEdgeMute?: (id: string, muted: boolean) => void;
   onEdgePan?: (id: string, pan: number) => void;
+  /** Live FX parameter change from the FX inspector (t18). */
+  onFxParams?: (id: string, fx: FxSpec) => void;
   onRemoveEdge?: (id: string) => void;
   /** Dynamic hub ports (R24). */
   onRemoveHubInput?: (hubId: string, inputId: string) => void;
@@ -567,6 +572,16 @@ export function Graph({
             />
           );
         })}
+
+        {/* FX inspector for the selected FX node — anchored in world space (t18). */}
+        {(() => {
+          const fxNode = soleSelected
+            ? nodes.find((n) => n.id === soleSelected && n.kind === 'fx' && n.fx)
+            : undefined;
+          return fxNode && onFxParams ? (
+            <FxPopover node={fxNode} onChange={(fx) => onFxParams(fxNode.id, fx)} />
+          ) : null;
+        })()}
       </div>
 
       {marquee && (

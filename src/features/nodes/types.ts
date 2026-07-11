@@ -57,6 +57,9 @@ export interface NodeModel {
   /** Backend keys for live-level matching (volume-levels event). */
   deviceId?: string;
   exeName?: string;
+  /** FX settings on an `fx` node (t18). Present for gain/gate/eq; comp/limiter/duck
+   *  (Wave 2) have no spec yet and pass through. */
+  fx?: import('@/shared/bridge').FxSpec;
   /** VU level 0..1 (live ~15fps once wired). */
   level: number;
   /** Route/source volume 0..1. */
