@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './Graph.css';
 import { NodeCard } from '@/features/nodes/ui/NodeCard';
 import { HubNode } from '@/features/nodes/ui/HubNode';
 import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
 import type { EdgeModel, HubModel, LinkStatus, NodeModel } from '@/features/nodes/types';
 import { LINK_OFFLINE, LINK_ONLINE, LINK_RECONNECTING } from '@/shared/bridge';
+import { soloChainNodes } from '@/features/nodes/routingGraph';
 import type { View } from '@/shared/hooks/useView';
 
 /** Live connection status of a source/output node, from the engine's live data.
@@ -448,6 +449,17 @@ export function Graph({
   // The lone selected node gets the action toolbar (R20). 2+ → SelectionBar.
   const soleSelected = selection.size === 1 ? selection.values().next().value : null;
 
+  // Solo chain highlight (t: solo redesign): the same cone the engine mutes by, so
+  // the audible path lights up and everything outside it dims. Empty ⇒ no solo.
+  const soloChain = useMemo(
+    () => soloChainNodes({ nodes, hubs, edges }),
+    [nodes, hubs, edges],
+  );
+  const anySolo = soloChain.size > 0;
+  // 'on' = part of the audible chain, 'off' = dimmed (muted by solo), undefined = no solo.
+  const chainState = (id: string): 'on' | 'off' | undefined =>
+    anySolo ? (soloChain.has(id) ? 'on' : 'off') : undefined;
+
   // Selected wire midpoint, projected world→screen for the (unscaled) popover.
   const selected = selectedEdge ? edges.find((x) => x.id === selectedEdge) : undefined;
   const selA = selected && ports[key(selected.from, 'out', selected.fromPort ?? '')];
@@ -461,11 +473,19 @@ export function Graph({
             const a = ports[key(e.from, 'out', e.fromPort ?? '')];
             const b = ports[key(e.to, 'in', e.toPort ?? '')];
             if (!a || !b) return null;
+            // An edge is in the solo chain only if BOTH endpoints are (matches the
+            // engine's route mute). Otherwise it's dimmed while any solo is active.
+            const edgeSolo = anySolo
+              ? soloChain.has(e.from) && soloChain.has(e.to)
+                ? 'is-solo-on'
+                : 'is-solo-off'
+              : '';
             const cls = [
               'edge',
               e.active ? 'is-active' : '',
               e.muted ? 'is-muted' : '',
               e.id === selectedEdge ? 'is-selected' : '',
+              edgeSolo,
             ]
               .filter(Boolean)
               .join(' ');
@@ -496,8 +516,10 @@ export function Graph({
             hub={selection.has(h.id) ? { ...h, selected: true } : h}
             search={searchFor(h.name, search)}
             actions={h.id === soleSelected}
+            chainState={chainState(h.id)}
             onRemoveInput={onRemoveHubInput}
             onInputVolume={onHubInputVolume}
+            onSolo={onNodeSolo}
             onDuplicate={onNodeDuplicate}
             onDelete={onNodeDelete}
             onRename={onNodeRename}
@@ -522,13 +544,13 @@ export function Graph({
               status={status}
               search={searchFor(n.name, search)}
               actions={n.id === soleSelected}
+              chainState={chainState(n.id)}
               onVolume={onNodeVolume}
               onMute={onNodeMute}
               onSolo={
-                // Solo isolates source channels — only meaningful on sources.
-                n.kind === 'source' || (n.kind === 'virtual' && n.virtualSource)
-                  ? onNodeSolo
-                  : undefined
+                // Solo auditions the chain through a node — meaningful on every
+                // audio node (source/output/virtual/fx); logic carries no audio.
+                n.kind !== 'logic' ? onNodeSolo : undefined
               }
               onDuplicate={onNodeDuplicate}
               onDelete={onNodeDelete}

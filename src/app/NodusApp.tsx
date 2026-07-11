@@ -373,6 +373,22 @@ export default function NodusApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [clearSelection]);
 
+  // "S" solos the whole selection at once (mass solo). e.code so it works on a
+  // Cyrillic layout too; ignored while typing / with modifiers (Ctrl+S = save etc.).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyS' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      if (selectionRef.current.size > 0) {
+        e.preventDefault();
+        storeRef.current.soloNodes([...selectionRef.current]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Undo (Ctrl+Z) / Redo (Ctrl+X) for scene edits. Use e.code (physical key) so it
   // works on non-Latin keyboard layouts too — on a Cyrillic layout e.key is 'я'/'ч',
   // not 'z'/'x'. Ignored while typing in a field so native text undo/cut still works.

@@ -27,6 +27,7 @@ export function NodeCard({
   search,
   actions,
   status,
+  chainState,
   onVolume,
   onMute,
   onSolo,
@@ -42,6 +43,8 @@ export function NodeCard({
   actions?: boolean;
   /** Live connection status shown persistently on the node (t19). */
   status?: LinkStatus;
+  /** Solo-chain highlight: 'on' = in the audible chain, 'off' = dimmed by solo. */
+  chainState?: 'on' | 'off';
   onVolume?: (id: string, volume: number) => void;
   onMute?: (id: string) => void;
   onSolo?: (id: string) => void;
@@ -79,6 +82,8 @@ export function NodeCard({
     node.compact ? 'is-compact' : '',
     search === 'match' ? 'is-search-match' : '',
     search === 'dim' ? 'is-search-dim' : '',
+    chainState === 'on' ? 'is-solo-on' : '',
+    chainState === 'off' ? 'is-solo-off' : '',
   ]
     .filter(Boolean)
     .join(' ');

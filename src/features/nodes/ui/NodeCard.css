@@ -84,6 +84,18 @@
   50% { opacity: 0.25; }
 }
 
+/* ── Solo-chain highlight: the audible chain pops, the rest dims ── */
+.node.is-solo-off {
+  opacity: 0.32;
+  filter: saturate(0.5);
+  transition: opacity var(--transition-fast), filter var(--transition-fast);
+}
+.node.is-solo-on .node-card {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-node-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent),
+    var(--shadow-node);
+}
+
 /* ── Pinned marker on the label (mirrors the solo tag; t24-C) ── */
 .node-pin-tag {
   margin-left: 6px;

@@ -17,8 +17,10 @@ export function HubNode({
   hub,
   search,
   actions,
+  chainState,
   onRemoveInput,
   onInputVolume,
+  onSolo,
   onPin,
   pinned,
   onDuplicate,
@@ -28,10 +30,14 @@ export function HubNode({
   hub: HubModel;
   search?: 'match' | 'dim';
   actions?: boolean;
+  /** Solo-chain highlight: 'on' = in the audible chain, 'off' = dimmed by solo. */
+  chainState?: 'on' | 'off';
   /** Remove a dynamic port (mixer input / splitter output). */
   onRemoveInput?: (hubId: string, portId: string) => void;
   /** Set a port's level → its route's trim (R18). */
   onInputVolume?: (hubId: string, portId: string, volume: number) => void;
+  /** Solo the mixer (audition everything through it). Splitters get no solo. */
+  onSolo?: (id: string) => void;
   onPin?: (id: string) => void;
   pinned?: boolean;
   onDuplicate?: (id: string) => void;
@@ -63,6 +69,8 @@ export function HubNode({
     hub.selected ? 'is-selected' : '',
     search === 'match' ? 'is-search-match' : '',
     search === 'dim' ? 'is-search-dim' : '',
+    chainState === 'on' ? 'is-solo-on' : '',
+    chainState === 'off' ? 'is-solo-off' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -131,6 +139,7 @@ export function HubNode({
       <div className="node-label">
         <span className="node-label-dot" />
         {split ? 'splitter' : 'mixer'}
+        {hub.solo && <span className="node-solo-tag">solo</span>}
         {pinned && <span className="node-pin-tag">pinned</span>}
       </div>
 
@@ -139,6 +148,8 @@ export function HubNode({
 
         {actions && (
           <NodeToolbar
+            soloActive={hub.solo}
+            onSolo={!split && onSolo ? () => onSolo(hub.id) : undefined}
             pinActive={pinned}
             onPin={onPin ? () => onPin(hub.id) : undefined}
             onDuplicate={() => onDuplicate?.(hub.id)}

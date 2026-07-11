@@ -225,6 +225,7 @@ export interface SceneStore {
   /** Set mute on several nodes at once (Mute all / Unmute all). */
   setNodesMuted: (ids: string[], muted: boolean) => void;
   toggleNodeSolo: (id: string) => void;
+  soloNodes: (ids: string[]) => void;
   addEdge: (edge: EdgeModel) => void;
   /** Connect two nodes by dragging a wire (out port → in port). */
   connect: (from: string, to: string, toPort?: string, fromPort?: string) => void;
@@ -726,10 +727,38 @@ export function useScene(live: boolean): SceneStore {
 
   const toggleNodeSolo = useCallback(
     (id: string) => {
-      patchNodes((ns) => ns.map((n) => (n.id === id ? { ...n, solo: !n.solo } : n)));
-      applyLater(); // solo changes effective mute of every other route
+      // Solo lives on leaf nodes AND mixer hubs — flip whichever this id is.
+      setScene((s) => ({
+        ...s,
+        nodes: s.nodes.map((n) => (n.id === id ? { ...n, solo: !n.solo } : n)),
+        hubs: s.hubs.map((h) => (h.id === id ? { ...h, solo: !h.solo } : h)),
+      }));
+      applyLater(); // solo changes the audible chain → re-apply
     },
-    [patchNodes, applyLater],
+    [applyLater],
+  );
+
+  /** Mass solo (multi-select): if every soloable id is already soloed, clear them;
+   *  otherwise solo them all. Splitter hubs / logic nodes are skipped. */
+  const soloNodes = useCallback(
+    (ids: string[]) => {
+      const set = new Set(ids);
+      if (set.size === 0) return;
+      setScene((s) => {
+        const soloableNode = (n: NodeModel) => set.has(n.id) && n.kind !== 'logic';
+        const soloableHub = (h: HubModel) => set.has(h.id) && (h.role ?? 'mixer') !== 'splitter';
+        const targets = [...s.nodes.filter(soloableNode), ...s.hubs.filter(soloableHub)];
+        if (targets.length === 0) return s;
+        const target = !targets.every((x) => x.solo); // all on → clear; else set
+        return {
+          ...s,
+          nodes: s.nodes.map((n) => (soloableNode(n) ? { ...n, solo: target } : n)),
+          hubs: s.hubs.map((h) => (soloableHub(h) ? { ...h, solo: target } : h)),
+        };
+      });
+      applyLater();
+    },
+    [applyLater],
   );
 
   const addEdge = useCallback(
@@ -961,6 +990,7 @@ export function useScene(live: boolean): SceneStore {
       toggleNodeMute,
       setNodesMuted,
       toggleNodeSolo,
+      soloNodes,
       addEdge,
       connect,
       removeEdge,
@@ -1006,6 +1036,7 @@ export function useScene(live: boolean): SceneStore {
       toggleNodeMute,
       setNodesMuted,
       toggleNodeSolo,
+      soloNodes,
       addEdge,
       connect,
       removeEdge,

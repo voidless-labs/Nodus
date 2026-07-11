@@ -65,6 +65,15 @@
   stroke-dasharray: 6 5;
 }
 
+/* Solo chain: edges inside the audible chain light up (accent), the rest fade. */
+.edge.is-solo-on {
+  stroke: var(--color-accent);
+  filter: drop-shadow(0 0 3px var(--color-accent-soft));
+}
+.edge.is-solo-off {
+  opacity: 0.18;
+}
+
 /* Selected = popover open: amber accent. */
 .edge.is-selected {
   stroke: var(--color-accent);

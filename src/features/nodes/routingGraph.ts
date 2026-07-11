@@ -26,22 +26,60 @@ const BACKEND_TYPE: Record<string, BackendNodeType | null> = {
   logic: null, // control-only, not in the audio graph
 };
 
-/** Audio-source nodes (the "channels" solo isolates): app/device sources, plus
- *  our virtual OUTPUT used as a source. NOT outputs, hubs or mic-sinks. */
-function isAudioSource(node: { kind?: string; virtualSource?: boolean }): boolean {
-  return node.kind === 'source' || (node.kind === 'virtual' && !!node.virtualSource);
+/** Minimal graph shape solo needs — satisfied by a full Scene and by the canvas's
+ *  raw nodes/hubs/edges props, so the same helper serves the engine and the UI. */
+type GraphLike = { nodes: NodeModel[]; hubs: HubModel[]; edges: EdgeModel[] };
+
+/** Nodes that can trigger solo: any node EXCEPT splitters (solo there is redundant
+ *  — one input fanned out) and logic (not audio). A node/hub with solo===true fires. */
+function soloTriggers(scene: GraphLike): string[] {
+  const ids: string[] = [];
+  for (const n of scene.nodes) if (n.solo && n.kind !== 'logic') ids.push(n.id);
+  for (const h of scene.hubs) if (h.solo && (h.role ?? 'mixer') !== 'splitter') ids.push(h.id);
+  return ids;
 }
 
-/** Effective mute of a node: its own mute, OR — when any source is soloed — a
- *  non-soloed SOURCE channel. Solo isolates sources: it must NOT mute hubs or
- *  outputs, otherwise the soloed source's own path THROUGH a mixer TO the output
- *  gets cut and you hear nothing (the whole point of solo is to hear that source). */
-function effectiveMuted(
-  node: { muted?: boolean; solo?: boolean; kind?: string; virtualSource?: boolean },
-  anySolo: boolean,
-): boolean {
-  if (node.muted) return true;
-  return anySolo && isAudioSource(node) && !node.solo;
+/**
+ * The "solo chain": when a node is soloed you audition the chain THROUGH it —
+ * everything upstream (what feeds it) and downstream (where it goes, so the signal
+ * still reaches an output). Returns the set of node ids to keep audible (empty when
+ * nothing is soloed). A route plays iff BOTH endpoints are in this set; multiple
+ * soloed nodes union their chains. Splitter/logic never trigger it (but are still
+ * traversed as intermediate nodes). Same helper drives the engine mute + the UI
+ * chain highlight, so they can never disagree.
+ */
+export function soloChainNodes(scene: GraphLike): Set<string> {
+  const triggers = soloTriggers(scene);
+  const chain = new Set<string>();
+  if (triggers.length === 0) return chain;
+
+  const push = (m: Map<string, string[]>, k: string, v: string) => {
+    const a = m.get(k);
+    if (a) a.push(v);
+    else m.set(k, [v]);
+  };
+  const fwd = new Map<string, string[]>(); // from → [to]  (downstream)
+  const rev = new Map<string, string[]>(); // to   → [from] (upstream)
+  for (const e of scene.edges) {
+    push(fwd, e.from, e.to);
+    push(rev, e.to, e.from);
+  }
+  const walk = (start: string, adj: Map<string, string[]>) => {
+    const stack = [start];
+    const visited = new Set<string>();
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      chain.add(cur);
+      for (const next of adj.get(cur) ?? []) if (!visited.has(next)) stack.push(next);
+    }
+  };
+  for (const t of triggers) {
+    walk(t, rev); // ancestors + self
+    walk(t, fwd); // descendants + self
+  }
+  return chain;
 }
 
 export function buildRoutingGraph(scene: Scene): RoutingGraph {
@@ -52,9 +90,10 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
   nodes.forEach((n) => byId.set(n.id, n));
   hubs.forEach((h) => byId.set(h.id, h));
 
-  // Solo isolates source channels: only a soloed *source* engages solo (soloing
-  // an output/hub must not silence the whole scene).
-  const anySolo = nodes.some((n) => isAudioSource(n) && n.solo);
+  // Solo = audition the chain(s) through the soloed node(s). Anything outside the
+  // chain is muted. Same helper feeds the UI highlight (see soloChainNodes).
+  const chain = soloChainNodes(scene);
+  const anySolo = chain.size > 0;
 
   // ── Nodes ────────────────────────────────────────────────────────────────
   const backendNodes: BackendNode[] = [];
@@ -98,12 +137,9 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
   }
 
   // ── Routes ───────────────────────────────────────────────────────────────
-  const muted = (id: string): boolean => {
-    const node = byId.get(id);
-    if (!node) return false;
-    // Hubs have no mute of their own; only leaf nodes carry mute/solo.
-    return effectiveMuted(node as NodeModel, anySolo);
-  };
+  // A node's OWN explicit mute (leaf nodes only; hubs have none).
+  const nodeMuted = (id: string): boolean =>
+    !!(byId.get(id) as { muted?: boolean } | undefined)?.muted;
 
   const routes = edges
     .filter((e: EdgeModel) => included.has(e.from) && included.has(e.to))
@@ -112,7 +148,13 @@ export function buildRoutingGraph(scene: Scene): RoutingGraph {
       from_node: e.from,
       to_node: e.to,
       volume: e.volume ?? 1,
-      muted: e.muted || muted(e.from) || muted(e.to),
+      // Muted by: the edge itself, either endpoint's explicit mute, or (when solo
+      // is active) being outside the soloed chain.
+      muted:
+        e.muted ||
+        nodeMuted(e.from) ||
+        nodeMuted(e.to) ||
+        (anySolo && (!chain.has(e.from) || !chain.has(e.to))),
       pan: e.pan ?? 0,
     }));
 

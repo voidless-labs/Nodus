@@ -97,6 +97,8 @@ export interface HubModel {
   level: number;
   active?: boolean;
   selected?: boolean;
+  /** Solo: audition the chain through this hub. Mixers only (splitters excluded). */
+  solo?: boolean;
   x: number;
   y: number;
 }
