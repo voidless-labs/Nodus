@@ -20,7 +20,7 @@ use crate::{
         virtual_device::{get_virtual_setup, query_virtual_status, VirtualSetupStatus},
     },
     detection::process::{detect_audio_processes, AudioProcess, ProcessDetector},
-    routing::{engine::RoutingEngine, graph::RoutingGraph, node::RouteId},
+    routing::{engine::RoutingEngine, graph::RoutingGraph, node::FxSpec, node::RouteId},
 };
 
 // ── Shared state ──────────────────────────────────────────────────────────
@@ -147,6 +147,18 @@ pub async fn set_route_pan(
     engine: State<'_, EngineState>,
 ) -> Result<(), String> {
     engine.0.set_route_pan(&route_id, pan).map_err(|e| e.to_string())
+}
+
+/// Live-update an FX node's parameters without restarting the engine (like
+/// set_route_volume). No-op if the node isn't in the running graph. (t18)
+#[tauri::command]
+pub async fn set_fx_params(
+    node_id: String,
+    spec: FxSpec,
+    engine: State<'_, EngineState>,
+) -> Result<(), String> {
+    engine.0.set_fx_params(&node_id, &spec);
+    Ok(())
 }
 
 /// Start the routing engine (WASAPI setup → blocking thread).

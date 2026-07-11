@@ -142,6 +142,7 @@ fn main() {
             nodus::bridge::set_route_mute,
             nodus::bridge::set_route_volume,
             nodus::bridge::set_route_pan,
+            nodus::bridge::set_fx_params,
             nodus::bridge::start_engine,
             nodus::bridge::stop_engine,
             nodus::bridge::get_virtual_setup_status,

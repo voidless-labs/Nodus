@@ -323,6 +323,7 @@ pub mod platform {
             volume: Arc<AtomicU32>,
             muted: Arc<AtomicBool>,
             pan: Arc<AtomicU32>,
+            fx: Vec<crate::audio::dsp::FxProcessor>,
         ) {
             let format = self.format;
             let ring_id = self.ring_id;
@@ -331,6 +332,7 @@ pub mod platform {
             stop.store(false, Ordering::SeqCst);
 
             std::thread::spawn(move || {
+                let mut fx = fx; // stateful FX chain for this route (t18)
                 // 1 ms scheduler resolution — thread::sleep(1) is otherwise
                 // ~15.6 ms and the writer drains the channel in bursts.
                 let _timer = crate::audio::session::TimerResolutionGuard::acquire();
@@ -382,6 +384,14 @@ pub mod platform {
                 while !stop.load(Ordering::SeqCst) {
                     match receiver.try_recv() {
                         Ok(mut frame) => {
+                            // FX chain before volume/pan (t18).
+                            if !fx.is_empty() && !frame.is_empty() {
+                                crate::audio::dsp::apply_fx_chain(
+                                    &mut fx,
+                                    &mut frame,
+                                    format.channels as usize,
+                                );
+                            }
                             let is_muted = muted.load(Ordering::Relaxed);
                             let vol = f32::from_bits(volume.load(Ordering::Relaxed));
                             let pan_v = f32::from_bits(pan.load(Ordering::Relaxed));
@@ -466,6 +476,7 @@ pub mod platform {
             _volume: Arc<AtomicU32>,
             _muted: Arc<AtomicBool>,
             _pan: Arc<AtomicU32>,
+            _fx: Vec<crate::audio::dsp::FxProcessor>,
         ) {
         }
         pub fn current_level(&self) -> f32 { 0.0 }

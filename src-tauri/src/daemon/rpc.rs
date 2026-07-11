@@ -178,6 +178,19 @@ pub async fn dispatch(state: &ServerState, req: RpcRequest) -> Result<Value, Str
             state.engine.set_route_pan(&id, pan).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
+        "set_fx_params" => {
+            let node_id = args
+                .get("nodeId")
+                .or_else(|| args.get("node_id"))
+                .and_then(|v| v.as_str())
+                .ok_or("missing nodeId")?
+                .to_string();
+            let spec_v = args.get("spec").ok_or("missing spec")?;
+            let spec: crate::routing::node::FxSpec =
+                serde_json::from_value(spec_v.clone()).map_err(|e| e.to_string())?;
+            state.engine.set_fx_params(&node_id, &spec);
+            Ok(Value::Null)
+        }
 
         other => Err(format!("unknown command: {other}")),
     }

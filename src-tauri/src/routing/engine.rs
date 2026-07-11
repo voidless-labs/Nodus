@@ -22,7 +22,9 @@ use thiserror::Error;
 use tracing::{debug, info, warn};
 
 use super::graph::{ActiveRoute, Graph, RoutingGraph};
+use super::node::{FxSpec, NodeId};
 use crate::audio::{
+    dsp::{FxParams, FxProcessor},
     session::{
         clamp_volume, find_audio_pid_for_exe, get_device_capture_format, volume_to_atomic,
         AudioFrame, AudioRenderer, LoopbackCapture, ProcessLoopbackCapture, SessionError,
@@ -178,6 +180,10 @@ pub struct RoutingEngine {
     /// running is a no-op — no teardown — so redundant applies don't flicker the
     /// engine (on→off→on) or drop a self-healing capture whose app is out. (t19)
     last_applied: Mutex<Option<String>>,
+    /// Live FX parameters keyed per FX node id (t18). Rebuilt on each apply from the
+    /// graph; `set_fx_params` updates a node's params in place (live, no re-apply),
+    /// so every renderer whose chain passes through that node hears it immediately.
+    fx_params: Arc<Mutex<HashMap<NodeId, Arc<FxParams>>>>,
 }
 
 impl RoutingEngine {
@@ -190,7 +196,35 @@ impl RoutingEngine {
             format: AudioFormat::default(),
             restart_lock: Mutex::new(()),
             last_applied: Mutex::new(None),
+            fx_params: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Live-update an FX node's parameters (called from the UI, like set_route_volume).
+    /// No-op if the node isn't in the currently-applied graph.
+    pub fn set_fx_params(&self, node_id: &str, spec: &FxSpec) {
+        if let Some(p) = lock_recover(&self.fx_params).get(node_id) {
+            p.store(spec);
+        }
+    }
+
+    /// Build the FX processor chain for a route, sharing one `Arc<FxParams>` per FX
+    /// node (created on first use this apply) so live updates reach every renderer.
+    fn build_fx_chain(&self, ar: &ActiveRoute, sample_rate: f32) -> Vec<FxProcessor> {
+        if ar.fx_chain.is_empty() {
+            return Vec::new();
+        }
+        let mut map = lock_recover(&self.fx_params);
+        ar.fx_chain
+            .iter()
+            .map(|inst| {
+                let params = Arc::clone(
+                    map.entry(inst.node_id.clone())
+                        .or_insert_with(|| Arc::new(FxParams::new(&inst.spec))),
+                );
+                FxProcessor::new(params, sample_rate)
+            })
+            .collect()
     }
 
     /// Apply a new routing graph snapshot. Restarts active routes.
@@ -397,6 +431,10 @@ impl RoutingEngine {
         info!("starting engine with {} active routes", active_routes.len());
         self.running.store(true, Ordering::SeqCst);
 
+        // Rebuild FX param stores from scratch — nodes removed from the graph drop
+        // out; wire_route repopulates from each route's fx_chain. (t18)
+        lock_recover(&self.fx_params).clear();
+
         let mut captures = lock_recover(&self.captures);
         let mut routes = lock_recover(&self.routes);
 
@@ -568,6 +606,9 @@ impl RoutingEngine {
         let volume = Arc::new(AtomicU32::new(volume_to_atomic(ar.volume)));
         let muted = Arc::new(AtomicBool::new(ar.muted));
         let pan = Arc::new(AtomicU32::new(volume_to_atomic(ar.pan)));
+        // FX chain for this route (t18) — one shared param store per FX node. Applied
+        // to the source buffer before volume/pan, inside whichever sink renders it.
+        let fx = self.build_fx_chain(&ar, capture_format.sample_rate as f32);
 
         let sink = if ar.to_is_virtual_mic {
             // Destination is the Nodus virtual microphone: write into the kernel
@@ -586,6 +627,7 @@ impl RoutingEngine {
                 Arc::clone(&volume),
                 Arc::clone(&muted),
                 Arc::clone(&pan),
+                fx,
             );
             RouteSink::VirtualMic(vr)
         } else {
@@ -598,6 +640,7 @@ impl RoutingEngine {
                 Arc::clone(&volume),
                 Arc::clone(&muted),
                 Arc::clone(&pan),
+                fx,
             );
             RouteSink::Wasapi(renderer)
         };

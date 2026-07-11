@@ -137,12 +137,158 @@ impl Biquad {
     }
 }
 
+// ── Live FX parameters + per-route processor (t18) ─────────────────────────
+use crate::routing::node::{FxKind, FxSpec};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
+
+/// Live, shared FX parameters for one FX node. The engine holds one `Arc<FxParams>`
+/// per FX node; every renderer whose chain passes through that node clones the Arc.
+/// `set_fx_params` stores new values and bumps `version`; renderers recompute
+/// coefficients only when they see a new version (never per-sample). `kind` is fixed
+/// at creation (it's the node's type — a type change rebuilds the graph).
+pub struct FxParams {
+    kind: FxKind,
+    bypassed: AtomicBool,
+    gain_db: AtomicU32,
+    open_db: AtomicU32,
+    close_db: AtomicU32,
+    freq: AtomicU32,
+    q: AtomicU32,
+    version: AtomicU32,
+}
+
+impl FxParams {
+    pub fn new(spec: &FxSpec) -> Self {
+        let p = Self {
+            kind: spec.kind,
+            bypassed: AtomicBool::new(spec.bypassed),
+            gain_db: AtomicU32::new(spec.gain_db.to_bits()),
+            open_db: AtomicU32::new(spec.open_db.to_bits()),
+            close_db: AtomicU32::new(spec.close_db.to_bits()),
+            freq: AtomicU32::new(spec.freq.to_bits()),
+            q: AtomicU32::new(spec.q.to_bits()),
+            version: AtomicU32::new(1),
+        };
+        p
+    }
+
+    /// Update live from a spec (kind is ignored — fixed at creation) and bump version.
+    pub fn store(&self, spec: &FxSpec) {
+        self.bypassed.store(spec.bypassed, Ordering::Relaxed);
+        self.gain_db.store(spec.gain_db.to_bits(), Ordering::Relaxed);
+        self.open_db.store(spec.open_db.to_bits(), Ordering::Relaxed);
+        self.close_db.store(spec.close_db.to_bits(), Ordering::Relaxed);
+        self.freq.store(spec.freq.to_bits(), Ordering::Relaxed);
+        self.q.store(spec.q.to_bits(), Ordering::Relaxed);
+        self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn load_f32(a: &AtomicU32) -> f32 {
+        f32::from_bits(a.load(Ordering::Relaxed))
+    }
+}
+
+/// A stateful FX processor bound to one FX node's live params, owned by a renderer.
+/// Recomputes coefficients when the params version changes; applies DSP per buffer.
+pub struct FxProcessor {
+    params: Arc<FxParams>,
+    last_version: u32,
+    sample_rate: f32,
+    gain_lin: f32,
+    gate: NoiseGate,
+    biquads: Vec<Biquad>, // one per channel (EQ)
+}
+
+impl FxProcessor {
+    pub fn new(params: Arc<FxParams>, sample_rate: f32) -> Self {
+        Self {
+            params,
+            last_version: 0, // forces a reload on the first buffer
+            sample_rate,
+            gain_lin: 1.0,
+            gate: NoiseGate::new(-45.0, -55.0),
+            biquads: Vec::new(),
+        }
+    }
+
+    fn reload(&mut self, channels: usize) {
+        match self.params.kind {
+            FxKind::Gain => {
+                self.gain_lin = db_to_linear(FxParams::load_f32(&self.params.gain_db));
+            }
+            FxKind::Gate => {
+                self.gate = NoiseGate::new(
+                    FxParams::load_f32(&self.params.open_db),
+                    FxParams::load_f32(&self.params.close_db),
+                );
+            }
+            FxKind::Eq => {
+                let freq = FxParams::load_f32(&self.params.freq).clamp(20.0, self.sample_rate * 0.45);
+                let q = FxParams::load_f32(&self.params.q).max(0.1);
+                let gain_db = FxParams::load_f32(&self.params.gain_db);
+                let proto = Biquad::peaking(self.sample_rate, freq, q, gain_db);
+                self.biquads = vec![proto; channels.max(1)];
+            }
+        }
+    }
+
+    /// Apply this FX to one interleaved buffer in place. No-op when bypassed.
+    pub fn process(&mut self, frame: &mut [f32], channels: usize) {
+        let v = self.params.version.load(Ordering::Relaxed);
+        if v != self.last_version {
+            self.reload(channels);
+            self.last_version = v;
+        }
+        if self.params.bypassed.load(Ordering::Relaxed) {
+            return;
+        }
+        match self.params.kind {
+            FxKind::Gain => apply_gain(frame, self.gain_lin),
+            FxKind::Gate => {
+                self.gate.process(frame);
+            }
+            FxKind::Eq => {
+                if self.biquads.len() < channels {
+                    self.reload(channels); // channel count grew (format change)
+                }
+                for (c, bq) in self.biquads.iter_mut().enumerate().take(channels) {
+                    let mut i = c;
+                    while i < frame.len() {
+                        frame[i] = bq.process_sample(frame[i]);
+                        i += channels;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Apply a whole FX chain (in signal order) to one buffer in place.
+pub fn apply_fx_chain(chain: &mut [FxProcessor], frame: &mut [f32], channels: usize) {
+    for p in chain.iter_mut() {
+        p.process(frame, channels);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn close(a: f32, b: f32, eps: f32) -> bool {
         (a - b).abs() <= eps
+    }
+
+    fn spec(kind: FxKind) -> FxSpec {
+        FxSpec {
+            kind,
+            bypassed: false,
+            gain_db: 0.0,
+            open_db: -45.0,
+            close_db: -55.0,
+            freq: 1000.0,
+            q: 1.0,
+        }
     }
 
     #[test]
@@ -217,5 +363,52 @@ mod tests {
             out = bq.process_sample(1.0);
         }
         assert!(out.is_finite());
+    }
+
+    #[test]
+    fn fx_processor_gain_applies() {
+        let mut s = spec(FxKind::Gain);
+        s.gain_db = 6.0; // ~×1.995
+        let mut fx = FxProcessor::new(Arc::new(FxParams::new(&s)), 48_000.0);
+        let mut buf = vec![0.1, -0.2, 0.3];
+        fx.process(&mut buf, 1);
+        assert!(close(buf[0], 0.1 * 1.995_262, 1e-4));
+    }
+
+    #[test]
+    fn fx_processor_bypass_is_noop() {
+        let mut s = spec(FxKind::Gain);
+        s.gain_db = 12.0;
+        s.bypassed = true;
+        let mut fx = FxProcessor::new(Arc::new(FxParams::new(&s)), 48_000.0);
+        let mut buf = vec![0.1, -0.2];
+        fx.process(&mut buf, 1);
+        assert_eq!(buf, vec![0.1, -0.2]); // untouched
+    }
+
+    #[test]
+    fn fx_processor_live_update_takes_effect() {
+        let mut s = spec(FxKind::Gain);
+        s.gain_db = 0.0; // unity
+        let params = Arc::new(FxParams::new(&s));
+        let mut fx = FxProcessor::new(Arc::clone(&params), 48_000.0);
+        let mut buf = vec![0.5];
+        fx.process(&mut buf, 1);
+        assert!(close(buf[0], 0.5, 1e-6)); // unity → unchanged
+
+        s.gain_db = 6.0;
+        params.store(&s); // live bump
+        let mut buf2 = vec![0.5];
+        fx.process(&mut buf2, 1);
+        assert!(close(buf2[0], 0.5 * 1.995_262, 1e-4)); // picked up new gain
+    }
+
+    #[test]
+    fn fx_processor_gate_silences_quiet() {
+        let s = spec(FxKind::Gate); // open −45, close −55
+        let mut fx = FxProcessor::new(Arc::new(FxParams::new(&s)), 48_000.0);
+        let mut quiet = vec![0.0005, -0.0005]; // ~−66 dB < close → gate shuts
+        fx.process(&mut quiet, 1);
+        assert_eq!(quiet, vec![0.0, 0.0]);
     }
 }

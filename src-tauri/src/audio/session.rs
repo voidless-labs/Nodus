@@ -1031,6 +1031,7 @@ pub mod platform {
             volume: Arc<std::sync::atomic::AtomicU32>,
             muted: Arc<AtomicBool>,
             pan: Arc<std::sync::atomic::AtomicU32>,
+            fx: Vec<crate::audio::dsp::FxProcessor>,
         ) {
             let device_id = self.device_id.clone();
             let format = self.format;
@@ -1040,7 +1041,7 @@ pub mod platform {
 
             std::thread::spawn(move || {
                 if let Err(e) = run_render(
-                    device_id, format, stop_flag, &mut source, volume, muted, pan, level, link,
+                    device_id, format, stop_flag, &mut source, volume, muted, pan, level, link, fx,
                 ) {
                     error!("audio render error: {e}");
                 }
@@ -1180,6 +1181,7 @@ pub mod platform {
         pan_atomic: Arc<std::sync::atomic::AtomicU32>,
         level: Arc<std::sync::atomic::AtomicU32>,
         link: Arc<std::sync::atomic::AtomicU8>,
+        mut fx: Vec<crate::audio::dsp::FxProcessor>,
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
@@ -1199,7 +1201,7 @@ pub mod platform {
             let ran = std::time::Instant::now();
             match render_session(
                 &device_id, format, &stop_flag, source, &volume_atomic, &muted, &pan_atomic,
-                &level, &opened, &link,
+                &level, &opened, &link, &mut fx,
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_recoverable(&e) => {
@@ -1240,6 +1242,9 @@ pub mod platform {
         opened: &AtomicBool,
         // Flipped to LINK_ONLINE once the stream is live (UI status dot).
         link: &std::sync::atomic::AtomicU8,
+        // FX chain applied to each buffer before volume/pan (t18). Stateful across
+        // re-opens (owned by run_render), so filter state survives a reconnect.
+        fx: &mut [crate::audio::dsp::FxProcessor],
     ) -> Result<(), SessionError> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
@@ -1308,6 +1313,14 @@ pub mod platform {
             while !stop_flag.load(Ordering::SeqCst) {
                 match source.try_recv() {
                     Ok(mut frame) => {
+                        // FX chain runs on the raw source buffer, before volume/pan (t18).
+                        if !fx.is_empty() && !frame.is_empty() {
+                            crate::audio::dsp::apply_fx_chain(
+                                fx,
+                                &mut frame,
+                                format.channels as usize,
+                            );
+                        }
                         let is_muted = muted.load(Ordering::Relaxed);
                         let vol = f32::from_bits(volume_atomic.load(Ordering::Relaxed));
                         let pan = f32::from_bits(pan_atomic.load(Ordering::Relaxed));
@@ -1510,6 +1523,7 @@ pub mod platform {
             _volume: Arc<std::sync::atomic::AtomicU32>,
             _muted: Arc<AtomicBool>,
             _pan: Arc<std::sync::atomic::AtomicU32>,
+            _fx: Vec<crate::audio::dsp::FxProcessor>,
         ) {
         }
 
