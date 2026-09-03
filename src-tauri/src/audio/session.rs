@@ -261,6 +261,8 @@ pub mod platform {
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
+        // Capture starves just as audibly as render when the system is loaded. (t30)
+        let _mmcss = crate::audio::mmcss::MmcssGuard::pro_audio();
 
         let mut tracker = LinkTracker::new();
         loop {
@@ -408,12 +410,12 @@ pub mod platform {
                             .map_err(|e| {
                                 SessionError::Wasapi(WasapiError::Buffer(e.to_string()))
                             })?;
-                        // Raw RMS level for VU meter, dBFS scale [-60, 0] → [0.0, 1.0].
+                        // Raw RMS level for VU meter, dBFS scale [-100, 0] → [0.0, 1.0].
                         // No gating or smoothing — show what the device actually captures.
                         let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                         let rms = (sum_sq / frame.len() as f32).sqrt();
                         let db = 20.0 * rms.max(1e-7_f32).log10();
-                        let scaled = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                        let scaled = ((db + 100.0) / 100.0).clamp(0.0, 1.0);
                         level.store(scaled.to_bits(), Ordering::Relaxed);
                         // Ignore send error — receiver may have been dropped
                         let _ = sender.send(frame);
@@ -749,6 +751,12 @@ pub mod platform {
         }
     }
 
+    /// How long a per-app capture may produce nothing before we suspect it is bound
+    /// to the wrong process of a multi-process app and check whether the audio
+    /// session has meanwhile shown up on a different pid. Long enough that ordinary
+    /// pauses between tracks never trigger it. (t31)
+    const SILENT_REBIND_AFTER: Duration = Duration::from_secs(5);
+
     /// Is this PID still a RUNNING process? A closed app → re-resolve by exe. (t19)
     /// NB: `OpenProcess` succeeds even for a process that has already EXITED (its
     /// object lingers until all handles close), so it can't tell alive from dead —
@@ -785,11 +793,20 @@ pub mod platform {
     ) -> Result<(), SessionError> {
         use crate::audio::wasapi::ComGuard;
         let _com = ComGuard::init()?;
+        // Per-app capture feeds the render chain — it needs the same priority. (t30)
+        let _mmcss = crate::audio::mmcss::MmcssGuard::pro_audio();
         loop {
             if stop_flag.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            match process_capture_session(pid, format, &stop_flag, &sender, &level) {
+            match process_capture_session(
+                pid,
+                exe_name.as_deref(),
+                format,
+                &stop_flag,
+                &sender,
+                &level,
+            ) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     if stop_flag.load(Ordering::SeqCst) {
@@ -825,6 +842,9 @@ pub mod platform {
     /// (detected via a periodic liveness check → recoverable error for the caller).
     fn process_capture_session(
         pid: u32,
+        // The source app's exe, when known — lets a silent capture check whether
+        // the audio session has moved to a sibling process. (t31)
+        exe_name: Option<&str>,
         format: AudioFormat,
         stop_flag: &Arc<AtomicBool>,
         sender: &broadcast::Sender<AudioFrame>,
@@ -935,6 +955,10 @@ pub mod platform {
             debug!("process loopback capture started (pid {pid})");
 
             let mut last_live_check = std::time::Instant::now();
+            let mut silent_since = std::time::Instant::now();
+            // Has this binding ever actually produced audio? Once it has, the pid is
+            // proven right and later silence just means the app is paused. (t31)
+            let mut ever_had_frames = false;
             while !stop_flag.load(Ordering::SeqCst) {
                 // Detect the app closing: process loopback on a dead pid just goes
                 // silent (no error), so poll liveness ~1/s → recoverable error. (t19)
@@ -946,11 +970,34 @@ pub mod platform {
                         )));
                     }
                 }
+
+                // A capture bound to the WRONG pid of a multi-process app produces
+                // nothing and never errors: the pid is alive and GetBuffer simply
+                // returns no frames, forever. That is how a boot-time binding stayed
+                // mute until the user pressed Restart Engine. Two conditions before
+                // we move: this binding has *never* yielded audio (so we are not
+                // disturbing an app that merely paused), and a *different* pid of the
+                // same exe now holds the audio session (positive evidence, not a
+                // hopeful rescan). Then fail, and the caller re-resolves. (t31)
+                if let Some(exe) = exe_name {
+                    if !ever_had_frames && silent_since.elapsed() > SILENT_REBIND_AFTER {
+                        silent_since = std::time::Instant::now(); // re-arm the window
+                        if let Ok(session_pid) = find_audio_pid_for_exe(exe, true) {
+                            if session_pid != pid {
+                                return Err(SessionError::DeviceUnavailable(format!(
+                                    "capture on pid {pid} never produced audio while '{exe}' \
+                                     plays on pid {session_pid}"
+                                )));
+                            }
+                        }
+                    }
+                }
                 let mut data_ptr = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
                 match capture.GetBuffer(&mut data_ptr, &mut frames, &mut flags, None, None) {
                     Ok(()) if frames > 0 => {
+                        ever_had_frames = true; // this pid is provably the audio one
                         let sample_count = frames as usize * n_channels;
                         let slice =
                             std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
@@ -961,7 +1008,7 @@ pub mod platform {
                         let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                         let rms = (sum_sq / frame.len() as f32).sqrt();
                         let db = 20.0 * rms.max(1e-7_f32).log10();
-                        let scaled = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                        let scaled = ((db + 100.0) / 100.0).clamp(0.0, 1.0);
                         level.store(scaled.to_bits(), Ordering::Relaxed);
                         let _ = sender.send(frame);
                     }
@@ -1074,6 +1121,20 @@ pub mod platform {
     /// before we give up and call it "offline". Generous — a BT sink taken out of
     /// the case and put in the ear can take several seconds to re-appear as ACTIVE.
     const RECONNECT_GRACE: Duration = Duration::from_secs(15);
+
+    /// How often a device's glitch tally is written to the log — and only when it
+    /// is non-zero, so a healthy stream stays silent in the log. (t30)
+    const GLITCH_REPORT_EVERY: Duration = Duration::from_secs(5);
+
+    /// A buffer arriving within this of the previous one means the stream is
+    /// flowing continuously — which is what makes an empty device buffer a genuine
+    /// underrun rather than ordinary silence between tracks. (t30)
+    const GLITCH_FLOW_WINDOW: Duration = Duration::from_millis(200);
+
+    /// Peak latency that makes a route worth mentioning in the log even when no
+    /// glitch counter moved — a backlog climbing quietly is the t32 failure, and
+    /// we want it visible before the user hears the lip-sync drift.
+    const LATENCY_NOTICE_MS: u64 = 300;
 
     // Wire codes for a render target's link state, shared via an AtomicU8 and
     // surfaced to the UI (a per-output-node status dot). Kept in sync with the
@@ -1188,6 +1249,9 @@ pub mod platform {
         // 1 ms scheduler resolution: thread::sleep(1) is otherwise ~15.6 ms on
         // Windows, which starves the device buffer between wakeups.
         let _timer = TimerResolutionGuard::acquire();
+        // Real-time scheduling class. Without it this thread loses the CPU to a
+        // starting game for tens of ms and the device buffer crackles. (t30)
+        let _mmcss = crate::audio::mmcss::MmcssGuard::pro_audio();
 
         // Self-healing across re-opens: a stream that was playing and just dropped →
         // "reconnecting"; after the grace window with no success — or a device that
@@ -1310,9 +1374,53 @@ pub mod platform {
             // gap, not between bursty chunks (which would make it sawtooth).
             let mut last_audio = std::time::Instant::now();
 
+            // t30/L4: glitch accounting. The globals feed the UI/command; these
+            // locals drive a periodic log line, so nodus.log records what the user's
+            // ears heard, attributed to the device it happened on.
+            let mut buffers_written: u64 = 0;
+            let (mut lag_events, mut lagged_frames, mut underruns) = (0u64, 0u64, 0u64);
+            let (mut shed_total, mut latency_peak) = (0u64, 0u64);
+            let mut last_report = std::time::Instant::now();
+            // Buffer stashed by the lag handler: the live edge we resynced to. (t32)
+            let mut pending: Option<AudioFrame> = None;
+
             while !stop_flag.load(Ordering::SeqCst) {
-                match source.try_recv() {
+                // Report only when something actually went wrong, at most once per
+                // window — a glitch storm must not become a log storm.
+                if last_report.elapsed() >= GLITCH_REPORT_EVERY {
+                    // Latency is reported even when nothing "broke": a backlog that
+                    // is quietly climbing is exactly the failure we want to see
+                    // before the user hears it as lip-sync drift. (t32)
+                    if lag_events > 0
+                        || underruns > 0
+                        || shed_total > 0
+                        || latency_peak >= LATENCY_NOTICE_MS
+                    {
+                        warn!(
+                            "audio health on {device_id}: {underruns} underruns, {lag_events} lag \
+                             events ({lagged_frames} buffers dropped), {shed_total} stale buffers \
+                             shed, peak latency {latency_peak} ms — in the last {}s",
+                            last_report.elapsed().as_secs()
+                        );
+                    }
+                    lag_events = 0;
+                    lagged_frames = 0;
+                    underruns = 0;
+                    shed_total = 0;
+                    latency_peak = 0;
+                    last_report = std::time::Instant::now();
+                }
+                // Play a stashed live-edge buffer first, else take the next one. (t32)
+                let got = match pending.take() {
+                    Some(f) => Ok(f),
+                    None => source.try_recv(),
+                };
+                match got {
                     Ok(mut frame) => {
+                        // Time since the previous buffer, read before `last_audio` is
+                        // refreshed below: a short gap means the stream is flowing,
+                        // which is what distinguishes an underrun from real silence.
+                        let gap = last_audio.elapsed();
                         // FX chain runs on the raw source buffer, before volume/pan (t18).
                         if !fx.is_empty() && !frame.is_empty() {
                             crate::audio::dsp::apply_fx_chain(
@@ -1343,13 +1451,13 @@ pub mod platform {
                             }
                         }
 
-                        // Post-volume RMS → dBFS [-60,0] → [0,1], smoothed (fast
+                        // Post-volume RMS → dBFS [-100,0] → [0,1], smoothed (fast
                         // attack / slow release) so the output VU isn't jerky.
                         if !frame.is_empty() {
                             let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                             let rms = (sum_sq / frame.len() as f32).sqrt();
                             let db = 20.0 * rms.max(1e-7_f32).log10();
-                            let raw = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                            let raw = ((db + 100.0) / 100.0).clamp(0.0, 1.0);
                             let prev = f32::from_bits(level.load(Ordering::Relaxed));
                             let smoothed = if raw >= prev { raw } else { prev * 0.82 + raw * 0.18 };
                             level.store(smoothed.to_bits(), Ordering::Relaxed);
@@ -1366,6 +1474,19 @@ pub mod platform {
                         let mut written = 0usize;
                         while written < total_frames && !stop_flag.load(Ordering::SeqCst) {
                             let padding = client.GetCurrentPadding().unwrap_or(0);
+                            // t30/L4: the device buffer ran dry while audio was still
+                            // flowing — WASAPI padded the gap with silence, and that
+                            // is the crackle. Count once per buffer; never on the very
+                            // first write (padding is legitimately 0 then) nor after a
+                            // genuine silence gap.
+                            if written == 0
+                                && padding == 0
+                                && buffers_written > 0
+                                && gap < GLITCH_FLOW_WINDOW
+                            {
+                                underruns += 1;
+                                crate::audio::glitch::record_underrun();
+                            }
                             let available = buf_frames.saturating_sub(padding) as usize;
                             if available == 0 {
                                 std::thread::sleep(Duration::from_millis(1));
@@ -1385,6 +1506,21 @@ pub mod platform {
                                 .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
                             written += n;
                         }
+                        buffers_written += 1;
+                        crate::audio::glitch::record_buffer();
+
+                        // How much audio is still ahead of the listener: what the
+                        // device holds plus what waits in the channel. The channel
+                        // part is an estimate — it counts buffers, sized by the one
+                        // just played. This is the number that climbs into the
+                        // seconds when the ratchet bites. (t32)
+                        let sr = format.sample_rate.max(1) as u64;
+                        let device_ms =
+                            client.GetCurrentPadding().unwrap_or(0) as u64 * 1000 / sr;
+                        let buffer_ms = total_frames as u64 * 1000 / sr;
+                        let latency_ms = device_ms + source.len() as u64 * buffer_ms;
+                        latency_peak = latency_peak.max(latency_ms);
+                        crate::audio::glitch::record_latency(latency_ms);
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
                         // No frame yet — sleep briefly. WASAPI shared mode handles
@@ -1403,7 +1539,44 @@ pub mod platform {
                         // let the 64-frame channel overflow while music was already
                         // playing. Skip the dropped frames and keep rendering;
                         // tearing the render down here was a real "no audio" bug.
-                        debug!("render lagged {n} frames on {device_id}, continuing");
+                        // Those buffers are gone for good — count them as the audio
+                        // loss they are, rather than only whispering to the log. (t30)
+                        lag_events += 1;
+                        lagged_frames += n;
+                        crate::audio::glitch::record_lag(n);
+
+                        // t32 — break the latency ratchet. On lag, tokio parks our
+                        // cursor on the OLDEST retained buffer, so a single device
+                        // stall left the renderer a whole channel behind — and it
+                        // STAYED there, because from then on both sides run at the
+                        // same average rate. Nothing ever drained it, which is how
+                        // latency grew into seconds and never came back. So drop
+                        // what is stale and resume at the live edge: losing a little
+                        // old audio is far better than playing seconds of it.
+                        let mut newest: Option<AudioFrame> = None;
+                        let mut shed = 0u64;
+                        loop {
+                            match source.try_recv() {
+                                Ok(f) => {
+                                    if newest.is_some() {
+                                        shed += 1; // the one it replaces was stale
+                                    }
+                                    newest = Some(f);
+                                }
+                                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(m)) => {
+                                    shed += m;
+                                }
+                                Err(_) => break, // Empty (caught up) or Closed
+                            }
+                        }
+                        shed_total += shed;
+                        crate::audio::glitch::record_stale_dropped(shed);
+                        debug!(
+                            "render lagged {n} on {device_id}; shed {shed} stale buffers, \
+                             resuming at the live edge"
+                        );
+                        // Play it on the next turn, through the normal path.
+                        pending = newest;
                         continue;
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break, // sender dropped

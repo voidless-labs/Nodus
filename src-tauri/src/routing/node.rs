@@ -24,6 +24,8 @@ pub enum FxKind {
     Gain,
     Gate,
     Eq,
+    Limiter,
+    Compressor,
 }
 
 /// FX parameters, flat + named so UI and engine share one shape. Fields are used
@@ -44,6 +46,19 @@ pub struct FxSpec {
     pub freq: f32,
     #[serde(default)]
     pub q: f32,
+    /// 5-band graphic EQ gains (dB) at fixed 60/250/1k/4k/16k Hz. UI-driven; the
+    /// single-band biquad DSP still uses freq/q/gain_db (5-band DSP lands later).
+    /// Fixed array keeps FxSpec `Copy`; `#[serde(default)]` = flat + back-compat.
+    #[serde(default)]
+    pub eq_bands: [f32; 5],
+    /// Limiter threshold + ceiling (dB, −40…0). Compressor reuses threshold_db + ratio.
+    /// UI-complete; DSP for limiter/compressor lands in the FX-functionality stage.
+    #[serde(default)]
+    pub threshold_db: f32,
+    #[serde(default)]
+    pub ceiling_db: f32,
+    #[serde(default)]
+    pub ratio: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

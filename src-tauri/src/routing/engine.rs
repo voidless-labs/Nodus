@@ -379,14 +379,14 @@ impl RoutingEngine {
                     if scaled <= 0.0 {
                         continue;
                     }
-                    let lin = 10f32.powf((scaled * 60.0 - 60.0) / 20.0);
+                    let lin = 10f32.powf((scaled * 100.0 - 100.0) / 20.0);
                     *sumsq.entry(h.to_device_id.clone()).or_insert(0.0) += lin * lin;
                 }
             }
         }
         for (dev, ss) in sumsq {
             let db = 20.0 * ss.sqrt().max(1e-7_f32).log10();
-            levels.insert(dev, ((db + 60.0) / 60.0).clamp(0.0, 1.0));
+            levels.insert(dev, ((db + 100.0) / 100.0).clamp(0.0, 1.0));
         }
         levels
     }
@@ -496,15 +496,31 @@ impl RoutingEngine {
             Device,
         }
         let (capture_key, backend) = if let Some(ref exe) = ar.exe_name {
-            match find_audio_pid_for_exe(exe, false) {
+            // Prefer the pid that actually holds the audio session: a multi-process
+            // app (Spotify, browsers) has several, and only one of them plays.
+            // When none does yet — the app is up but hasn't opened its session, the
+            // usual state right after a Windows boot — bind provisionally so the
+            // route exists, and let the capture's silence watchdog move it onto the
+            // real audio pid once the session appears. Saying which of the two
+            // happened is what makes the boot race readable in the log. (t31)
+            match find_audio_pid_for_exe(exe, true) {
                 Ok(pid) => {
                     debug!("resolved {exe} → pid {pid} (process loopback)");
                     (format!("exe:{exe}"), Backend::Process(pid))
                 }
-                Err(e) => {
-                    debug!("skipping route for {exe}: {e}");
-                    return Ok(()); // app not running or no audio session yet
-                }
+                Err(_) => match find_audio_pid_for_exe(exe, false) {
+                    Ok(pid) => {
+                        debug!(
+                            "{exe} has no audio session yet — binding provisionally to pid \
+                             {pid}; will rebind when the session appears"
+                        );
+                        (format!("exe:{exe}"), Backend::Process(pid))
+                    }
+                    Err(e) => {
+                        debug!("skipping route for {exe}: {e}");
+                        return Ok(()); // app not running at all
+                    }
+                },
             }
         } else if ar.from_is_virtual {
             (ar.from_device_id.clone(), Backend::Virtual)

@@ -160,6 +160,8 @@ fn main() {
             nodus::bridge::create_virtual_device,
             nodus::bridge::remove_virtual_device,
             nodus::bridge::rename_virtual_device,
+            nodus::bridge::get_audio_health,
+            nodus::bridge::reset_audio_health,
         ])
         .system_tray(build_tray())
         .on_system_tray_event(|app, event| match event {

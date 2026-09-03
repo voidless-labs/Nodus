@@ -620,6 +620,10 @@ mod tests {
             close_db: 0.0,
             freq: 1000.0,
             q: 1.0,
+            eq_bands: [0.0; 5],
+            threshold_db: 0.0,
+            ceiling_db: 0.0,
+            ratio: 0.0,
         });
         let mut gain = Node::new(NodeType::Fx, "Gain", "");
         gain.fx = Some(FxSpec {
@@ -630,6 +634,10 @@ mod tests {
             close_db: 0.0,
             freq: 0.0,
             q: 0.0,
+            eq_bands: [0.0; 5],
+            threshold_db: 0.0,
+            ceiling_db: 0.0,
+            ratio: 0.0,
         });
         let out = make_node(NodeType::Output, "out-dev");
         let (sid, eid, gid, oid) =

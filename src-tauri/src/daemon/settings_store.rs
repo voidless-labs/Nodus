@@ -47,6 +47,9 @@ pub struct Settings {
     // ── Appearance (applied live, frontend) ─────────────────────────────────
     /// UI accent color as a CSS hex string. Drives --color-accent and friends.
     pub accent: String,
+    /// Node card style: "primary" (New Primary, default) | "glass" | "legacy".
+    /// Drives `data-node-style` on the document root (frontend, live).
+    pub node_style: String,
 }
 
 impl Default for Settings {
@@ -61,6 +64,7 @@ impl Default for Settings {
             close_to_tray: true,
             start_with_windows: false,
             accent: "#F5C542".into(),
+            node_style: "primary".into(),
         }
     }
 }

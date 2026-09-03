@@ -226,14 +226,14 @@ pub mod platform {
                         let mut frame = vec![0f32; SAMPLES_PER_CHUNK];
                         view.read_chunk(local_read, &mut frame);
                         local_read += BYTES_PER_CHUNK;
-                        // RMS level for the source VU meter, dBFS [-60,0] → [0,1] —
+                        // RMS level for the source VU meter, dBFS [-100,0] → [0,1] —
                         // raw per chunk, like the real captures; the shared CSS
                         // meter transition does the visual smoothing (t21).
                         empty_reads = 0;
                         let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                         let rms = (sum_sq / frame.len() as f32).sqrt();
                         let db = 20.0 * rms.max(1e-7_f32).log10();
-                        level.store(((db + 60.0) / 60.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+                        level.store(((db + 100.0) / 100.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
                         let _ = tx.send(frame);
                     } else {
                         // Only a real gap (>~24 ms) decays the meter, so it stays

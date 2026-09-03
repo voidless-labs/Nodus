@@ -398,7 +398,7 @@ pub mod platform {
 
                             apply_route_dsp(&mut frame, format.channels, is_muted, vol, pan_v);
 
-                            // Post-volume RMS for the mic's VU meter, dBFS [-60,0]
+                            // Post-volume RMS for the mic's VU meter, dBFS [-100,0]
                             // → [0,1] (t21) — raw per packet, exactly like the real
                             // captures/renderers; the shared CSS `transition: width
                             // 90ms` on .node-meter-fill does the visual smoothing.
@@ -406,7 +406,7 @@ pub mod platform {
                             let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                             let rms = (sum_sq / frame.len().max(1) as f32).sqrt();
                             let db = 20.0 * rms.max(1e-7_f32).log10();
-                            level.store(((db + 60.0) / 60.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+                            level.store(((db + 100.0) / 100.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 
                             let bytes = frame_to_ring_bytes(&frame, &format);
 

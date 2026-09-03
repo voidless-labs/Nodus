@@ -230,6 +230,8 @@ impl FxProcessor {
                 let proto = Biquad::peaking(self.sample_rate, freq, q, gain_db);
                 self.biquads = vec![proto; channels.max(1)];
             }
+            // UI-complete; DSP lands in the FX-functionality stage → pass through.
+            FxKind::Limiter | FxKind::Compressor => {}
         }
     }
 
@@ -260,6 +262,8 @@ impl FxProcessor {
                     }
                 }
             }
+            // Pass-through until limiter/compressor DSP lands.
+            FxKind::Limiter | FxKind::Compressor => {}
         }
     }
 }
@@ -288,6 +292,10 @@ mod tests {
             close_db: -55.0,
             freq: 1000.0,
             q: 1.0,
+            eq_bands: [0.0; 5],
+            threshold_db: 0.0,
+            ceiling_db: 0.0,
+            ratio: 0.0,
         }
     }
 

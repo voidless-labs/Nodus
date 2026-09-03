@@ -102,6 +102,23 @@ pub async fn get_running_audio_processes() -> Result<Vec<AudioProcess>, String> 
     detect_audio_processes().map_err(|e| e.to_string())
 }
 
+// ── Diagnostics (t30) ──────────────────────────────────────────────────────
+
+/// Audio-path health: buffers lost to a lagging renderer and device-buffer
+/// underruns. The "crackling under load" bug is intermittent, so it is measured
+/// rather than eyeballed — see `.nodus/task/t30-audio-glitch-under-load.md`.
+#[tauri::command]
+pub async fn get_audio_health() -> Result<crate::audio::glitch::AudioHealth, String> {
+    Ok(crate::audio::glitch::snapshot())
+}
+
+/// Zero the audio-health counters to take a clean baseline before a test run.
+#[tauri::command]
+pub async fn reset_audio_health() -> Result<(), String> {
+    crate::audio::glitch::reset();
+    Ok(())
+}
+
 // ── Routing commands ───────────────────────────────────────────────────────
 
 /// Replace the entire routing graph and restart routing if engine is running.
@@ -536,10 +553,14 @@ mod tests {
             display_name: "Arma 3".into(),
             source_type: SourceType::Game,
             icon: None,
+            has_audio_session: true,
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("arma3_x64.exe"));
         assert!(json.contains("\"game\""));
+        // The flag has to survive the wire — the UI and the change-gate both read it (t31).
+        let back: AudioProcess = serde_json::from_str(&json).unwrap();
+        assert!(back.has_audio_session);
     }
 
     #[test]

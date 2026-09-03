@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -46,6 +45,12 @@ pub struct AudioProcess {
     /// App icon as a PNG data URL, extracted from the .exe (R7). None if unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Does this process currently hold a Windows render audio session — i.e. is
+    /// it able to produce sound right now? For a multi-process app this is what
+    /// separates the audio process from its siblings, and a change here has to
+    /// reach the UI even though the PID never moved. (t31)
+    #[serde(default)]
+    pub has_audio_session: bool,
 }
 
 /// Map from known exe names to (display_name, source_type).
@@ -176,7 +181,8 @@ mod platform {
             })?
         };
 
-        // Use LinkedHashMap ordering: first-seen PID wins for each exe name.
+        // One entry per exe name; the PID holding the audio session wins, else
+        // first-seen (see the `replaces` rule below).
         let mut seen: std::collections::HashMap<String, AudioProcess> =
             std::collections::HashMap::new();
 
@@ -201,22 +207,30 @@ mod platform {
             );
             let key = exe_name.to_lowercase();
 
-            if !seen.contains_key(&key) {
-                let known = classify_exe(&exe_name);
-                let pid = entry.th32ProcessID;
-                // Session-based: a real app using audio, but not us and not OS plumbing.
-                let session_ok =
-                    audio_pids.contains(&pid) && pid != own_pid && !is_system_session_exe(&key);
-                // Show if it's a known audio app OR it currently uses audio (t23).
-                if known.is_some() || session_ok {
+            let known = classify_exe(&exe_name);
+            let pid = entry.th32ProcessID;
+            // Session-based: a real app using audio, but not us and not OS plumbing.
+            let session_ok =
+                audio_pids.contains(&pid) && pid != own_pid && !is_system_session_exe(&key);
+            // Show if it's a known audio app OR it currently uses audio (t23).
+            if known.is_some() || session_ok {
+                // Which PID stands for a multi-process app (Spotify, browsers):
+                // the one actually holding the audio session, when there is one —
+                // otherwise first-seen. Reporting the audio PID is what makes the
+                // value meaningful, and is what lets the detector notice that a
+                // session finally appeared without the PID set changing. (t31)
+                let replaces = match seen.get(&key) {
+                    None => true,
+                    Some(prev) => session_ok && !prev.has_audio_session,
+                };
+                if replaces {
                     let (display_name, source_type) = match known {
                         Some((d, t)) => (d.to_string(), t),
                         None => (pretty_exe_name(&exe_name), SourceType::Unknown),
                     };
                     // trace, not debug: this fires for every process every scan
                     // (~2s) and drowns the log; enable with RUST_LOG=…nodus=trace.
-                    trace!("detected audio process: {exe_name} (pid {pid}, session={})",
-                        audio_pids.contains(&pid));
+                    trace!("detected audio process: {exe_name} (pid {pid}, session={session_ok})");
                     seen.insert(
                         key,
                         AudioProcess {
@@ -225,6 +239,7 @@ mod platform {
                             display_name,
                             source_type,
                             icon: crate::detection::icon::icon_data_url(pid, &exe_name),
+                            has_audio_session: session_ok,
                         },
                     );
                 }
@@ -256,16 +271,34 @@ mod platform {
 
 pub use platform::detect_audio_processes;
 
+/// What has to change before the UI and the engine are told the process list moved.
+///
+/// The PID set alone is **not** enough, and that was the bug: a known app
+/// (Spotify, Firefox, Discord) is listed from the moment its process starts, so
+/// when its audio session appears a moment later the PID set is byte-identical
+/// and the change goes unreported forever. That is precisely how a session went
+/// missing after a Windows reboot — while a normal app restart, which *does*
+/// change the PID, always worked. (t31)
+type ProcessFingerprint = (String, u32, bool);
+
+/// Reduce a process list to the state the rest of the app actually reacts to.
+fn fingerprint(procs: &[AudioProcess]) -> Vec<ProcessFingerprint> {
+    procs
+        .iter()
+        .map(|p| (p.exe_name.to_lowercase(), p.pid, p.has_audio_session))
+        .collect()
+}
+
 /// Background detector that polls for process changes and notifies via a callback.
 pub struct ProcessDetector {
-    known: Arc<Mutex<HashSet<u32>>>,
+    known: Arc<Mutex<Vec<ProcessFingerprint>>>,
     running: Arc<Mutex<bool>>,
 }
 
 impl ProcessDetector {
     pub fn new() -> Self {
         Self {
-            known: Arc::new(Mutex::new(HashSet::new())),
+            known: Arc::new(Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
         }
     }
@@ -290,10 +323,10 @@ impl ProcessDetector {
             while *lock_recover(&running) {
                 match detect_audio_processes() {
                     Ok(procs) => {
-                        let current_pids: HashSet<u32> = procs.iter().map(|p| p.pid).collect();
+                        let current = fingerprint(&procs);
                         let mut known_lock = lock_recover(&known);
-                        if *known_lock != current_pids {
-                            *known_lock = current_pids;
+                        if *known_lock != current {
+                            *known_lock = current;
                             drop(known_lock);
                             on_change(procs);
                         }
@@ -333,6 +366,44 @@ mod tests {
         let (name, kind) = classify_exe("spotify.exe").unwrap();
         assert_eq!(kind, SourceType::Music);
         let _ = name;
+    }
+
+    fn proc(exe: &str, pid: u32, session: bool) -> AudioProcess {
+        AudioProcess {
+            exe_name: exe.into(),
+            pid,
+            display_name: exe.into(),
+            source_type: SourceType::Unknown,
+            icon: None,
+            has_audio_session: session,
+        }
+    }
+
+    /// The t31 regression itself: a known app is listed the moment its process
+    /// starts, and its audio session appears later with the PID unchanged. Keying
+    /// the change on PIDs alone made that transition invisible, so nothing
+    /// downstream ever learned the app had become routable.
+    #[test]
+    fn session_appearing_changes_the_fingerprint() {
+        let before = [proc("spotify.exe", 1234, false)];
+        let after = [proc("spotify.exe", 1234, true)];
+        assert_ne!(fingerprint(&before), fingerprint(&after));
+    }
+
+    /// A steady state must stay quiet — the detector fires on change only.
+    #[test]
+    fn identical_lists_share_a_fingerprint() {
+        let a = [proc("spotify.exe", 1234, true), proc("firefox.exe", 9, false)];
+        let b = [proc("spotify.exe", 1234, true), proc("firefox.exe", 9, false)];
+        assert_eq!(fingerprint(&a), fingerprint(&b));
+    }
+
+    /// The case that always worked — closing and reopening an app — keeps working.
+    #[test]
+    fn pid_change_still_changes_the_fingerprint() {
+        let before = [proc("spotify.exe", 1234, true)];
+        let after = [proc("spotify.exe", 5678, true)];
+        assert_ne!(fingerprint(&before), fingerprint(&after));
     }
 
     #[test]
