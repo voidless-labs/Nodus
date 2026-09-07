@@ -384,6 +384,17 @@ pub mod platform {
                 while !stop.load(Ordering::SeqCst) {
                     match receiver.try_recv() {
                         Ok(mut frame) => {
+                            let is_muted = muted.load(Ordering::Relaxed);
+                            // Mute BEFORE the FX chain — same reasoning as the WASAPI
+                            // render path in `session::run_render`: a muted route
+                            // carries no audio, so the effects and their meters must
+                            // see silence, and the dynamics must be allowed to
+                            // release instead of freezing mid-duck. (t18)
+                            if is_muted {
+                                for sample in &mut frame {
+                                    *sample = 0.0;
+                                }
+                            }
                             // FX chain before volume/pan (t18).
                             if !fx.is_empty() && !frame.is_empty() {
                                 crate::audio::dsp::apply_fx_chain(
@@ -392,7 +403,6 @@ pub mod platform {
                                     format.channels as usize,
                                 );
                             }
-                            let is_muted = muted.load(Ordering::Relaxed);
                             let vol = f32::from_bits(volume.load(Ordering::Relaxed));
                             let pan_v = f32::from_bits(pan.load(Ordering::Relaxed));
 

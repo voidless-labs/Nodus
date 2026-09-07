@@ -445,7 +445,10 @@ pub fn setup_background_tasks(
     std::thread::spawn(move || {
         let mut prev: std::collections::HashMap<String, f32> = Default::default();
         let mut prev_links: std::collections::HashMap<String, u8> = Default::default();
+        let mut prev_fx: std::collections::HashMap<String, crate::audio::dsp::FxLevel> =
+            Default::default();
         let mut was_running = false;
+        let mut last_retry = std::time::Instant::now();
         let publish = |payload: serde_json::Value, bus: &crate::daemon::EventBus| {
             let _ = bus.send(crate::daemon::ServerEvent {
                 event: "volume-levels".into(),
@@ -469,6 +472,16 @@ pub fn setup_background_tasks(
                     event: "engine-state".into(),
                     payload: serde_json::json!(running),
                 });
+            }
+            // Routes whose source app wasn't running at apply time are deferred, not
+            // dropped — retry them so an app started after the engine (or after a boot)
+            // gets picked up without a manual Restart Engine (t31). Placed ABOVE the
+            // VU early-continue on purpose: turning meters off must not stop the engine
+            // from converging on its graph. Costs one atomic load while idle.
+            const RETRY_PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+            if running && last_retry.elapsed() >= RETRY_PENDING_EVERY {
+                last_retry = std::time::Instant::now();
+                engine.0.retry_pending_routes();
             }
             // Link status per output device (online / reconnecting / offline) — emitted
             // independently of the VU toggle (a user who turned meters off still wants
@@ -497,6 +510,15 @@ pub fn setup_background_tasks(
                         publish(payload, &bus_levels);
                     }
                 }
+                if !prev_fx.is_empty() {
+                    prev_fx.clear();
+                    if let Ok(payload) = serde_json::to_value(&prev_fx) {
+                        let _ = bus_levels.send(crate::daemon::ServerEvent {
+                            event: "fx-levels".into(),
+                            payload,
+                        });
+                    }
+                }
                 continue;
             }
             let levels = engine.0.get_levels();
@@ -509,6 +531,30 @@ pub fn setup_background_tasks(
                     publish(payload, &bus_levels);
                 }
                 prev = levels;
+            }
+            // Gain reduction per FX node, dB. Its own event rather than a key in
+            // the level map: those are 0..1 meters, this is decibels, and mixing
+            // the two units in one payload invites a silent misread on the UI side.
+            // 0.1 dB is finer than any meter can show, so it gates the repaint.
+            let fx = engine.0.get_fx_levels();
+            let fx_changed = fx.len() != prev_fx.len()
+                || fx.iter().any(|(k, v)| match prev_fx.get(k) {
+                    None => true,
+                    // 0.1 dB and 0.01 of a meter are both finer than anything the UI
+                    // can draw, so they gate the repaint.
+                    Some(p) => {
+                        (p.reduction_db - v.reduction_db).abs() > 0.1
+                            || (p.input_level - v.input_level).abs() > 0.01
+                    }
+                });
+            if fx_changed {
+                if let Ok(payload) = serde_json::to_value(&fx) {
+                    let _ = bus_levels.send(crate::daemon::ServerEvent {
+                        event: "fx-levels".into(),
+                        payload,
+                    });
+                }
+                prev_fx = fx;
             }
         }
     });

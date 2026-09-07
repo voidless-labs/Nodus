@@ -196,6 +196,20 @@ impl Graph {
             .map(|r| r.pan = pan.clamp(-1.0, 1.0))
     }
 
+    /// Update an FX node's parameters in the graph.
+    ///
+    /// The live params store is what renderers actually read, but the graph is what a
+    /// route is REBUILT from. Without writing through here, a knob turned while a route
+    /// waits for its app — its FX node has no params store yet, so the live write is a
+    /// no-op — would be silently lost the moment the route finally wires. The route
+    /// setters below already write through; this closes the same gap for FX. (t31)
+    pub fn set_node_fx(&mut self, node_id: &NodeId, spec: FxSpec) -> Result<(), GraphError> {
+        self.nodes
+            .get_mut(node_id)
+            .ok_or_else(|| GraphError::NodeNotFound(node_id.clone()))
+            .map(|n| n.fx = Some(spec))
+    }
+
     pub fn get_node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
     }

@@ -184,6 +184,12 @@ pub struct RoutingEngine {
     /// graph; `set_fx_params` updates a node's params in place (live, no re-apply),
     /// so every renderer whose chain passes through that node hears it immediately.
     fx_params: Arc<Mutex<HashMap<NodeId, Arc<FxParams>>>>,
+    /// Routes whose source app wasn't running when the graph was applied. They used
+    /// to be dropped silently and never looked at again, so an app started after the
+    /// engine stayed mute until a manual Restart Engine (t31). Keeping them here and
+    /// retrying makes the engine converge on the graph's intent instead of wiring it
+    /// once: the graph says "route Firefox", so the route is owed until Firefox is up.
+    pending: Arc<Mutex<Vec<ActiveRoute>>>,
 }
 
 impl RoutingEngine {
@@ -197,15 +203,25 @@ impl RoutingEngine {
             restart_lock: Mutex::new(()),
             last_applied: Mutex::new(None),
             fx_params: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Live-update an FX node's parameters (called from the UI, like set_route_volume).
     /// No-op if the node isn't in the currently-applied graph.
     pub fn set_fx_params(&self, node_id: &str, spec: &FxSpec) {
-        if let Some(p) = lock_recover(&self.fx_params).get(node_id) {
-            p.store(spec);
+        // Live path — every renderer whose chain passes this node hears it at once.
+        {
+            if let Some(p) = lock_recover(&self.fx_params).get(node_id) {
+                p.store(spec);
+            }
         }
+        // Durable path — the graph is what a route is rebuilt from. For an FX node that
+        // no renderer has instantiated (its route is still waiting for its app) the live
+        // write above is a no-op, and the knob turn would vanish the moment the route
+        // wires. `set_route_volume`/`mute`/`pan` already write through; this is the same
+        // guarantee for FX. Node absent from the applied graph → nothing to record. (t31)
+        let _ = lock_recover(&self.graph).set_node_fx(&node_id.to_string(), *spec);
     }
 
     /// Build the FX processor chain for a route, sharing one `Arc<FxParams>` per FX
@@ -356,6 +372,17 @@ impl RoutingEngine {
     ///  - output: destination device id — the COMBINED post-volume level of every
     ///    route rendering to that device (so two apps → one output show one merged
     ///    meter). Combined in linear RMS space, then re-scaled to dBFS [0,1] (t16).
+    /// Gain reduction each FX node is applying right now, in dB (0 = idle), keyed
+    /// by FX node id. This is how a Gate / Limiter / Compressor proves it is doing
+    /// something: their faces otherwise carry no indicator at all, so "seems not to
+    /// work" and "works but is invisible" look identical. (t18 wave 6)
+    pub fn get_fx_levels(&self) -> HashMap<NodeId, crate::audio::dsp::FxLevel> {
+        lock_recover(&self.fx_params)
+            .iter()
+            .map(|(id, p)| (id.clone(), p.level()))
+            .collect()
+    }
+
     pub fn get_levels(&self) -> HashMap<String, f32> {
         // Per-source capture levels.
         let mut levels: HashMap<String, f32> = lock_recover(&self.captures)
@@ -423,6 +450,81 @@ impl RoutingEngine {
         states
     }
 
+    /// Number of routes waiting for their source app to appear. Diagnostics + tests.
+    pub fn pending_route_count(&self) -> usize {
+        lock_recover(&self.pending).len()
+    }
+
+    /// Retry routes deferred because their source app wasn't running (t31).
+    ///
+    /// Called periodically from the background thread in `bridge.rs`: the engine has
+    /// no scheduler of its own, and spawning one just for this would duplicate a loop
+    /// that already ticks several times a second. Returns how many routes got wired.
+    ///
+    /// Deliberately independent of the process detector — `find_audio_pid_for_exe`
+    /// asks the session manager directly, so a missed `process-changed` event can't
+    /// keep a route deferred.
+    pub fn retry_pending_routes(&self) -> usize {
+        // Cheap path first: this runs on a timer and the queue is empty in the
+        // normal case, so it must not touch the restart lock to find that out.
+        if !self.running.load(Ordering::SeqCst) || lock_recover(&self.pending).is_empty() {
+            return 0;
+        }
+        // Wiring mutates the same state apply_graph/stop rebuild, so take the same
+        // lock they do, in the same order (restart → captures → routes).
+        let _restart = lock_recover(&self.restart_lock);
+        if !self.running.load(Ordering::SeqCst) {
+            return 0; // stopped while we waited for the lock
+        }
+        // Drain rather than iterate in place: wire_route re-queues whatever still
+        // isn't ready, and the lock isn't reentrant.
+        let mut queue: Vec<ActiveRoute> = std::mem::take(&mut *lock_recover(&self.pending));
+        if queue.is_empty() {
+            return 0;
+        }
+
+        // The queue holds a SNAPSHOT taken when the graph was applied. A route can
+        // wait here for minutes, and meanwhile the user can mute it, move its faders
+        // or turn an FX knob — all of which land on the graph and on live handles,
+        // and a route that has no handles yet receives none of them. Wiring the stale
+        // snapshot would bring the app up unmuted or at the old gain, which is worse
+        // than staying silent. So re-read from the graph, with the same formulas
+        // `resolve_device_routes` uses: volume is the product of the chain, mute is
+        // any edge in it, pan is the final edge. (t31)
+        {
+            let g = lock_recover(&self.graph);
+            for ar in &mut queue {
+                refresh_route_from_graph(&g, ar);
+            }
+        }
+        let attempted = queue.len();
+        let mut failed = 0usize;
+
+        let mut captures = lock_recover(&self.captures);
+        let mut routes = lock_recover(&self.routes);
+        for ar in queue {
+            let route_id = ar.route_id.clone();
+            let exe = ar.exe_name.clone().unwrap_or_default();
+            // A hard wiring error (capture/render failed to start) is NOT the deferred
+            // case — the app is up and something else is wrong. Report it and drop the
+            // route rather than retrying a broken device twice a second forever.
+            if let Err(e) = self.wire_route(ar, &mut captures, &mut routes) {
+                failed += 1;
+                warn!("deferred route {route_id} for '{exe}' failed to wire: {e}");
+            }
+        }
+        drop(routes);
+        drop(captures);
+
+        let wired = attempted
+            .saturating_sub(lock_recover(&self.pending).len())
+            .saturating_sub(failed);
+        if wired > 0 {
+            info!("picked up {wired} deferred route(s) — source app(s) now running");
+        }
+        wired
+    }
+
     fn start_internal(&self) -> Result<(), EngineError> {
         let g = lock_recover(&self.graph);
         let active_routes = g.resolve_device_routes();
@@ -434,6 +536,9 @@ impl RoutingEngine {
         // Rebuild FX param stores from scratch — nodes removed from the graph drop
         // out; wire_route repopulates from each route's fx_chain. (t18)
         lock_recover(&self.fx_params).clear();
+        // Same for the deferred queue: it describes the PREVIOUS graph's unmet routes.
+        // wire_route refills it from this resolve. (t31)
+        lock_recover(&self.pending).clear();
 
         let mut captures = lock_recover(&self.captures);
         let mut routes = lock_recover(&self.routes);
@@ -517,8 +622,17 @@ impl RoutingEngine {
                         (format!("exe:{exe}"), Backend::Process(pid))
                     }
                     Err(e) => {
-                        debug!("skipping route for {exe}: {e}");
-                        return Ok(()); // app not running at all
+                        // App not running at all. Defer instead of dropping: the graph
+                        // still asks for this route, and the app may start at any moment
+                        // (autostart after a boot, or the user just opening it). `warn!`
+                        // rather than `debug!` — silently doing nothing is exactly what
+                        // made this undiagnosable from the log. (t31)
+                        warn!(
+                            "route for '{exe}' deferred — app not running ({e}); \
+                             will retry until it appears"
+                        );
+                        lock_recover(&self.pending).push(ar.clone());
+                        return Ok(());
                     }
                 },
             }
@@ -684,6 +798,8 @@ impl RoutingEngine {
 
     fn stop_internal(&self) {
         self.running.store(false, Ordering::SeqCst);
+        // Nothing is owed while stopped — a start re-resolves the graph from scratch. (t31)
+        lock_recover(&self.pending).clear();
 
         let mut captures = lock_recover(&self.captures);
         let mut routes = lock_recover(&self.routes);
@@ -698,6 +814,36 @@ impl RoutingEngine {
         }
 
         info!("engine stopped");
+    }
+}
+
+/// Re-read a deferred route's live-controllable fields from the current graph.
+///
+/// Everything the user can change WITHOUT a re-apply — mute, faders, FX knobs —
+/// reaches live handles and the graph, but a route still waiting for its app has no
+/// handles to reach. Wiring its original snapshot would bring the app up unmuted or
+/// at a stale gain. Mirrors `resolve_device_routes`: volume is the product of the
+/// chain, mute is any edge in it, pan is the final edge. (t31)
+fn refresh_route_from_graph(g: &Graph, ar: &mut ActiveRoute) {
+    ar.volume = ar
+        .chain
+        .iter()
+        .map(|c| g.get_route(c).map(|r| r.volume).unwrap_or(1.0))
+        .product();
+    ar.muted = ar
+        .chain
+        .iter()
+        .any(|c| g.get_route(c).map(|r| r.muted).unwrap_or(false));
+    if let Some(r) = g.get_route(&ar.route_id) {
+        ar.pan = r.pan;
+    }
+    // A node shared with an already-wired route keeps its live params — build_fx_chain
+    // reuses the existing Arc — so this can never overwrite a live value; it only fills
+    // in a node no renderer has instantiated yet, whose knob turns live in the graph.
+    for inst in &mut ar.fx_chain {
+        if let Some(spec) = g.get_node(&inst.node_id).and_then(|n| n.fx) {
+            inst.spec = spec;
+        }
     }
 }
 
@@ -767,5 +913,91 @@ mod tests {
         let graph = make_graph("dev-a", "dev-b");
         // Should not panic
         let _ = engine.apply_graph(graph);
+    }
+
+    /// t31: a route whose source app isn't running must be REMEMBERED, not dropped.
+    /// Dropping it is what left an app started after the engine silent until the user
+    /// hit Restart Engine by hand.
+    #[test]
+    fn route_for_absent_app_is_deferred_not_dropped() {
+        let engine = RoutingEngine::new();
+        // Nothing owed while stopped, and the retry is a cheap no-op there — it ticks
+        // off the VU thread whether or not the engine is up.
+        assert_eq!(engine.pending_route_count(), 0);
+        assert_eq!(engine.retry_pending_routes(), 0);
+
+        let ar = ActiveRoute {
+            route_id: "r1".to_string(),
+            fx_chain: Vec::new(),
+            chain: vec!["r1".to_string()],
+            from_device_id: String::new(),
+            exe_name: Some("nodus-no-such-process-t31.exe".to_string()),
+            from_is_virtual: false,
+            to_device_id: "dev-b".to_string(),
+            to_is_virtual_mic: false,
+            volume: 1.0,
+            muted: false,
+            pan: 0.0,
+        };
+        let mut captures = HashMap::new();
+        let mut routes = HashMap::new();
+        engine
+            .wire_route(ar, &mut captures, &mut routes)
+            .expect("deferring is not a wiring error");
+
+        assert_eq!(engine.pending_route_count(), 1, "route must be queued for retry");
+        assert!(routes.is_empty(), "nothing to wire yet — the app isn't up");
+        assert!(captures.is_empty());
+
+        // Stopping clears what's owed: a later start re-resolves the graph from scratch.
+        engine.stop_internal();
+        assert_eq!(engine.pending_route_count(), 0);
+    }
+
+    /// t31: a route can sit deferred for minutes. Mute/faders/FX knobs changed while it
+    /// waited reach the graph but not the route (it has no handles yet), so wiring the
+    /// original snapshot would bring the app up unmuted or at a stale gain.
+    #[test]
+    fn deferred_route_is_wired_from_the_current_graph_not_its_snapshot() {
+        let src = Node::new(NodeType::Source, "Src", "");
+        let mix = Node::new(NodeType::Mixer, "Mix", "");
+        let out = Node::new(NodeType::Output, "Out", "dev-b");
+        let e1 = Route::new(src.id.clone(), mix.id.clone());
+        let e2 = Route::new(mix.id.clone(), out.id.clone());
+        let (e1_id, e2_id) = (e1.id.clone(), e2.id.clone());
+
+        let mut g = Graph::new();
+        g.apply_snapshot(RoutingGraph {
+            nodes: vec![src, mix, out],
+            routes: vec![e1, e2],
+        })
+        .expect("valid graph");
+
+        // How the route looked when it was deferred: open, full gain, centred.
+        let mut ar = ActiveRoute {
+            route_id: e2_id.clone(),
+            fx_chain: Vec::new(),
+            chain: vec![e1_id.clone(), e2_id.clone()],
+            from_device_id: String::new(),
+            exe_name: Some("nodus-no-such-process-t31.exe".to_string()),
+            from_is_virtual: false,
+            to_device_id: "dev-b".to_string(),
+            to_is_virtual_mic: false,
+            volume: 1.0,
+            muted: false,
+            pan: 0.0,
+        };
+
+        // What the user did while the app was down.
+        g.set_volume(&e1_id, 0.5).expect("edge exists");
+        g.set_volume(&e2_id, 0.5).expect("edge exists");
+        g.set_mute(&e1_id, true).expect("edge exists");
+        g.set_pan(&e2_id, -1.0).expect("edge exists");
+
+        refresh_route_from_graph(&g, &mut ar);
+
+        assert!(ar.muted, "a muted route must not come up playing");
+        assert!((ar.volume - 0.25).abs() < 1e-6, "chain volumes multiply, like resolve does");
+        assert!((ar.pan + 1.0).abs() < 1e-6, "pan comes from the final edge");
     }
 }

@@ -404,12 +404,24 @@ pub mod platform {
                             data_ptr as *const f32,
                             sample_count,
                         );
-                        let frame = slice.to_vec();
+                        let mut frame = slice.to_vec();
                         capture
                             .ReleaseBuffer(frames_available)
                             .map_err(|e| {
                                 SessionError::Wasapi(WasapiError::Buffer(e.to_string()))
                             })?;
+                        // WASAPI may mark a buffer SILENT instead of zero-filling it,
+                        // and its contents are then explicitly undefined. Windows
+                        // usually does zero it, which is why passing it straight
+                        // through has worked — but "usually" is not a guarantee, and
+                        // the failure mode is stale buffer contents pushed into the
+                        // render chain as audible garbage. Zero it ourselves.
+                        if flags
+                            & windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT.0 as u32
+                            != 0
+                        {
+                            frame.fill(0.0);
+                        }
                         // Raw RMS level for VU meter, dBFS scale [-100, 0] → [0.0, 1.0].
                         // No gating or smoothing — show what the device actually captures.
                         let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
@@ -677,9 +689,16 @@ pub mod platform {
                     "{exe_name} running but no active audio session yet"
                 )));
             }
-            // Initial wiring: target any PID; INCLUDE_TARGET_PROCESS_TREE picks up
-            // audio once it starts.
-            match pids.iter().next() {
+            // Initial wiring: no session yet, so target a PID and let
+            // INCLUDE_TARGET_PROCESS_TREE pick up the audio once it starts — which only
+            // works if we picked an ANCESTOR of the process that ends up playing.
+            // `iter().next()` on a HashSet is arbitrary and varies run to run, which is
+            // the worst kind of bug: works today, silent tomorrow. The lowest PID is the
+            // earliest-created process, i.e. most often the parent of a multi-process
+            // app. It's a heuristic, not a guarantee (PIDs get recycled) — the silence
+            // watchdog in `process_capture_session` is what actually corrects a wrong
+            // guess. This just makes the guess repeatable and usually right. (t31)
+            match pids.iter().min() {
                 Some(&p) => Ok(p),
                 None => Err(SessionError::DeviceUnavailable(format!("no pid for {exe_name}"))),
             }
@@ -997,16 +1016,35 @@ pub mod platform {
                 let mut flags = 0u32;
                 match capture.GetBuffer(&mut data_ptr, &mut frames, &mut flags, None, None) {
                     Ok(()) if frames > 0 => {
-                        ever_had_frames = true; // this pid is provably the audio one
                         let sample_count = frames as usize * n_channels;
                         let slice =
                             std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
-                        let frame = slice.to_vec();
+                        let mut frame = slice.to_vec();
                         capture
                             .ReleaseBuffer(frames)
                             .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
+                        // A SILENT buffer's contents are undefined by spec — zero it
+                        // rather than forwarding stale memory into the render chain.
+                        let silent = flags
+                            & windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT.0 as u32
+                            != 0;
+                        if silent {
+                            frame.fill(0.0);
+                        }
                         let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
                         let rms = (sum_sq / frame.len() as f32).sqrt();
+                        // Getting frames does NOT prove this is the right pid: WASAPI
+                        // loopback keeps handing out buffers of SILENCE for a process
+                        // that isn't playing, to keep the clock going. Counting those
+                        // made `ever_had_frames` true within milliseconds, so the
+                        // rebind watchdog above could never fire — which is why an
+                        // already-running Spotify stayed mute after a boot until
+                        // Restart Engine. Only actual signal proves the binding: the
+                        // SILENT flag is the authoritative answer, and the RMS check
+                        // covers a driver that zero-fills without setting it. (t31)
+                        if !silent && rms > 0.0 {
+                            ever_had_frames = true;
+                        }
                         let db = 20.0 * rms.max(1e-7_f32).log10();
                         let scaled = ((db + 100.0) / 100.0).clamp(0.0, 1.0);
                         level.store(scaled.to_bits(), Ordering::Relaxed);
@@ -1421,6 +1459,28 @@ pub mod platform {
                         // refreshed below: a short gap means the stream is flowing,
                         // which is what distinguishes an underrun from real silence.
                         let gap = last_audio.elapsed();
+                        let is_muted = muted.load(Ordering::Relaxed);
+
+                        // Mute goes BEFORE the FX chain, not after it.
+                        //
+                        // Nodus is a router, not a mixing console: a muted route
+                        // carries no audio, so everything downstream — the effects
+                        // and the meters on their faces — must see silence. Zeroing
+                        // afterwards (the old order) left the gate held open and the
+                        // limiter ducking on a route that was already silent, the
+                        // node's face reporting work that reached nobody, and
+                        // unmuting then let the still-ducked gain through until it
+                        // released.
+                        //
+                        // The chain is fed zeros rather than skipped: that way the
+                        // dynamics actually release and the gate closes, so audio
+                        // returns from a clean state instead of a frozen one.
+                        if is_muted {
+                            for sample in &mut frame {
+                                *sample = 0.0;
+                            }
+                        }
+
                         // FX chain runs on the raw source buffer, before volume/pan (t18).
                         if !fx.is_empty() && !frame.is_empty() {
                             crate::audio::dsp::apply_fx_chain(
@@ -1429,25 +1489,22 @@ pub mod platform {
                                 format.channels as usize,
                             );
                         }
-                        let is_muted = muted.load(Ordering::Relaxed);
+
                         let vol = f32::from_bits(volume_atomic.load(Ordering::Relaxed));
                         let pan = f32::from_bits(pan_atomic.load(Ordering::Relaxed));
-
-                        if is_muted {
-                            for sample in &mut frame {
-                                *sample = 0.0;
-                            }
-                        } else if format.channels == 2 && pan != 0.0 {
-                            // Stereo balance: pan<0 attenuates right, pan>0 attenuates left.
-                            let lg = if pan <= 0.0 { 1.0 } else { 1.0 - pan };
-                            let rg = if pan >= 0.0 { 1.0 } else { 1.0 + pan };
-                            for pair in frame.chunks_exact_mut(2) {
-                                pair[0] *= vol * lg;
-                                pair[1] *= vol * rg;
-                            }
-                        } else {
-                            for sample in &mut frame {
-                                *sample *= vol;
+                        if !is_muted {
+                            if format.channels == 2 && pan != 0.0 {
+                                // Stereo balance: pan<0 attenuates right, pan>0 attenuates left.
+                                let lg = if pan <= 0.0 { 1.0 } else { 1.0 - pan };
+                                let rg = if pan >= 0.0 { 1.0 } else { 1.0 + pan };
+                                for pair in frame.chunks_exact_mut(2) {
+                                    pair[0] *= vol * lg;
+                                    pair[1] *= vol * rg;
+                                }
+                            } else {
+                                for sample in &mut frame {
+                                    *sample *= vol;
+                                }
                             }
                         }
 
