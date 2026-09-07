@@ -158,6 +158,7 @@ export type NodusEvent =
   | 'volume-levels'
   | 'device-links'
   | 'fx-levels'
+  | 'hub-levels'
   | 'engine-state';
 
 // ── Runtime detection + lazy Tauri API ──────────────────────────────────────

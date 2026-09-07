@@ -27,6 +27,7 @@ export function HubNode({
   onRename,
   inSourceColorVars,
   outConnectedPorts,
+  rowLevels,
 }: {
   hub: HubModel;
   search?: 'match' | 'dim';
@@ -53,6 +54,9 @@ export function HubNode({
   inSourceColorVars?: Record<string, string>;
   /** Per-port: does this OUT port carry an edge? Keyed like the above. */
   outConnectedPorts?: Record<string, boolean>;
+  /** Live signal per row, keyed by port id — measured by the engine where the
+   *  signal actually enters this hub (after any FX before it), never inferred here. */
+  rowLevels?: Record<string, number>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
@@ -113,7 +117,11 @@ export function HubNode({
             data-port={p.id}
             style={split ? undefined : inPortStyle(p.id)}
           />
-          <span className="hub-sig" aria-hidden />
+          <span
+            className="hub-sig"
+            aria-hidden
+            style={{ '--sig': String(rowLevels?.[p.id] ?? 0) } as React.CSSProperties}
+          />
           <span className="hub-in-name">{p.label}</span>
           <VolumeSlider
             className="hub-slider"

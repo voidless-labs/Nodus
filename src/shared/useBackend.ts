@@ -67,6 +67,8 @@ export interface Backend {
   links: DeviceLinks;
   /** Live gain reduction per FX node id, in dB (0 = idle) — the GR meters. */
   fxLevels: FxLevels;
+  /** Signal at each Mixer/Splitter row, keyed by that row's edge id (t18 6b). */
+  hubLevels: Record<string, number>;
   live: boolean;
   /** Turn the engine on/off. `onStarted` runs once the engine has started
    *  (used to push the current routing graph). No-op argument in the browser. */
@@ -80,6 +82,7 @@ export function useBackend(): Backend {
   const [levels, setLevels] = useState<VolumeLevels>({});
   const [links, setLinks] = useState<DeviceLinks>({});
   const [fxLevels, setFxLevels] = useState<FxLevels>({});
+  const [hubLevels, setHubLevels] = useState<Record<string, number>>({});
   const [live, setLiveState] = useState(false);
   const unsubs = useRef<Array<() => void>>([]);
 
@@ -115,6 +118,7 @@ export function useBackend(): Backend {
         await listenToEvent<VolumeLevels>('volume-levels', (l) => setLevels(l ?? {})),
         await listenToEvent<DeviceLinks>('device-links', (m) => setLinks(m ?? {})),
         await listenToEvent<FxLevels>('fx-levels', (m) => setFxLevels(m ?? {})),
+        await listenToEvent<Record<string, number>>('hub-levels', (m) => setHubLevels(m ?? {})),
         // Engine on/off driven by the engine itself → every client stays in sync.
         // Raw setter (no start/stop call) so this can't loop with the broadcaster.
         await listenToEvent<boolean>('engine-state', (on) => setLiveState(!!on)),
@@ -143,5 +147,5 @@ export function useBackend(): Backend {
     }
   }, []);
 
-  return { ready, tauri: isTauri, devices, processes, levels, links, fxLevels, live, setLive };
+  return { ready, tauri: isTauri, devices, processes, levels, links, fxLevels, hubLevels, live, setLive };
 }

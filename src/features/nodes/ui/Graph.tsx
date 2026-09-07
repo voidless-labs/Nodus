@@ -77,6 +77,7 @@ export function Graph({
   search = '',
   levels = {},
   fxLevels = {},
+  hubLevels = {},
   links = {},
   presentDevices,
   runningApps,
@@ -117,6 +118,8 @@ export function Graph({
     string,
     { reduction_db: number; input_level: number; active: boolean; spectrum?: number[] }
   >;
+  /** Signal at each hub row, keyed by that row's EDGE id (engine, t18 6b). */
+  hubLevels?: Record<string, number>;
   /** Live per-output-device link health, keyed by device id (LINK_* code). */
   links?: Record<string, number>;
   /** Ids of devices currently present (enumerated) — for the node status dot. */
@@ -501,6 +504,20 @@ export function Graph({
     }
     return { kindVar, inFrom, outHas, wired, inFromPort, outHasPort };
   }, [nodes, hubs, edges]);
+  // Hub row signal, re-keyed from EDGE (how the engine reports it) to PORT (how a
+  // row is identified on screen): a mixer row owns the edge landing on its in-port,
+  // a splitter row the edge leaving its out-port. Nothing is computed here — the
+  // level is the engine's, this only says which row it belongs to. (t18 6b)
+  const hubRowLevels = useMemo(() => {
+    const byHub: Record<string, Record<string, number>> = {};
+    for (const e of edges) {
+      const lvl = hubLevels[e.id];
+      if (lvl == null) continue;
+      if (e.toPort) (byHub[e.to] ??= {})[e.toPort] = lvl;
+      if (e.fromPort) (byHub[e.from] ??= {})[e.fromPort] = lvl;
+    }
+    return byHub;
+  }, [edges, hubLevels]);
   // 'on' = part of the audible chain, 'off' = dimmed (muted by solo), undefined = no solo.
   const chainState = (id: string): 'on' | 'off' | undefined =>
     anySolo ? (soloChain.has(id) ? 'on' : 'off') : undefined;
@@ -591,6 +608,7 @@ export function Graph({
               pinned={pinned?.has(h.id)}
               inSourceColorVars={inSourceColorVars}
               outConnectedPorts={outConnectedPorts}
+              rowLevels={hubRowLevels[h.id]}
             />
           );
         })}

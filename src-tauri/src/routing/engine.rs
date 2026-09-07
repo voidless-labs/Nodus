@@ -21,8 +21,8 @@ use std::{
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
-use super::graph::{ActiveRoute, Graph, RoutingGraph};
-use super::node::{FxSpec, NodeId};
+use super::graph::{ActiveRoute, Graph, HubTap, RoutingGraph};
+use super::node::{FxSpec, NodeId, RouteId};
 use crate::audio::{
     dsp::{FxParams, FxProcessor},
     session::{
@@ -150,6 +150,10 @@ struct RouteHandles {
     chain: Vec<String>,
     /// Destination device id — used to aggregate output VU per device (t16).
     to_device_id: String,
+    /// Where this route meets a Mixer/Splitter, for the per-input dots (t18 wave 6b).
+    hub_taps: Vec<HubTap>,
+    /// Key into `captures` — the tap's level source when no FX precedes the hub.
+    capture_key: String,
 }
 
 struct CaptureHandle {
@@ -381,6 +385,40 @@ impl RoutingEngine {
             .iter()
             .map(|(id, p)| (id.clone(), p.level()))
             .collect()
+    }
+
+    /// Signal level arriving at each hub row, keyed by the EDGE that row owns —
+    /// the UI addresses a Mixer input / Splitter output by its port, and each port
+    /// is exactly one edge. (t18 wave 6b)
+    ///
+    /// The value is measured where the signal actually is: the OUTPUT of the last FX
+    /// before the hub, or the source capture when nothing precedes it. Reading the
+    /// source level instead would light the dot for a microphone sitting behind a
+    /// closed gate — the node would contradict what you hear, which is the same
+    /// class of bug as the gate badge.
+    pub fn get_hub_levels(&self) -> HashMap<RouteId, f32> {
+        let fx = lock_recover(&self.fx_params);
+        let captures = lock_recover(&self.captures);
+        let mut out: HashMap<RouteId, f32> = HashMap::new();
+        for handles in lock_recover(&self.routes).values() {
+            for h in handles {
+                for tap in &h.hub_taps {
+                    let level = match &tap.after_fx {
+                        Some(node) => fx.get(node).map(|p| p.output_level()),
+                        None => captures.get(&h.capture_key).map(|c| c.capture.current_level()),
+                    };
+                    if let Some(v) = level {
+                        // Splitter fan-out visits the same edge from several routes
+                        // carrying the same signal; keep the loudest so a momentary
+                        // zero from one of them can't blank a live row.
+                        out.entry(tap.edge.clone())
+                            .and_modify(|cur| *cur = cur.max(v))
+                            .or_insert(v);
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn get_levels(&self) -> HashMap<String, f32> {
@@ -729,6 +767,8 @@ impl RoutingEngine {
                     sink: None,
                     chain: ar.chain,
                     to_device_id: ar.to_device_id,
+                    hub_taps: ar.hub_taps,
+                    capture_key: capture_key.clone(),
                 });
             return Ok(());
         }
@@ -792,6 +832,8 @@ impl RoutingEngine {
                 sink: Some(sink),
                 chain: ar.chain,
                 to_device_id: ar.to_device_id,
+                hub_taps: ar.hub_taps,
+                capture_key,
             });
         Ok(())
     }
@@ -938,6 +980,7 @@ mod tests {
             volume: 1.0,
             muted: false,
             pan: 0.0,
+            hub_taps: Vec::new(),
         };
         let mut captures = HashMap::new();
         let mut routes = HashMap::new();
@@ -986,6 +1029,7 @@ mod tests {
             volume: 1.0,
             muted: false,
             pan: 0.0,
+            hub_taps: Vec::new(),
         };
 
         // What the user did while the app was down.

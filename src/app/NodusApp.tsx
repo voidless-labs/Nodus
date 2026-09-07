@@ -468,6 +468,7 @@ export default function NodusApp() {
               search={search}
               levels={backend.levels}
               fxLevels={backend.fxLevels}
+              hubLevels={backend.hubLevels}
               links={backend.links}
               presentDevices={presentDevices}
               runningApps={runningApps}

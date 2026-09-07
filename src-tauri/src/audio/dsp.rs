@@ -549,6 +549,13 @@ pub struct FxParams {
     /// draws what the node is doing, so showing the input lets you read cause and
     /// effect in one glance. Only ever written by an EQ.
     spectrum: [AtomicU32; SPECTRUM_BANDS],
+    /// OUTBOUND: the level LEAVING this FX, dBFS-scaled 0..1. Read by the engine for
+    /// the per-input dots on a Mixer/Splitter fed through this node.
+    ///
+    /// Fan-out shares one FX node between several renderers, so the last writer wins
+    /// here too — but harmlessly: every route through this node carries the same
+    /// signal at this point, so they all write the same figure.
+    output_level: AtomicU32,
 }
 
 /// One FX node's live telemetry, as published to the UI.
@@ -594,8 +601,18 @@ impl FxParams {
             input_level: AtomicU32::new(0f32.to_bits()),
             active: AtomicBool::new(false),
             spectrum: std::array::from_fn(|_| AtomicU32::new(0f32.to_bits())),
+            output_level: AtomicU32::new(0f32.to_bits()),
         };
         p
+    }
+
+    /// Level leaving this FX right now, dBFS-scaled 0..1.
+    pub fn output_level(&self) -> f32 {
+        Self::load_f32(&self.output_level)
+    }
+
+    fn set_output_level(&self, level: f32) {
+        self.output_level.store(level.to_bits(), Ordering::Relaxed);
     }
 
     /// Everything this FX node currently reports to the UI.
@@ -685,6 +702,8 @@ pub struct FxProcessor {
     /// Reporting peak-follower state (linear). Kept per processor rather than read
     /// back from the shared params, so fan-out routes don't fight over it.
     in_level: f32,
+    /// Same follower, on the buffer as it LEAVES this effect (feeds hub input dots).
+    out_level: f32,
     report_release: f32,
 }
 
@@ -702,6 +721,7 @@ impl FxProcessor {
             limiter: Limiter::new(sample_rate, 0.0, 0.0),
             compressor: Compressor::new(sample_rate, 0.0, 1.0),
             in_level: 0.0,
+            out_level: 0.0,
             report_release: smoothing_coeff(sample_rate, REPORT_RELEASE_S),
         }
     }
@@ -773,6 +793,7 @@ impl FxProcessor {
             self.params.set_input_level(dbfs_scaled(lvl));
             self.params.set_gain_reduction(0.0);
             self.params.set_active(false);
+            self.report_output(frame); // bypassed still passes signal through
             return;
         }
         match self.params.kind {
@@ -836,6 +857,9 @@ impl FxProcessor {
                 self.params.set_active(gr > ACTIVE_GR_DB);
             }
         }
+        // Measured once, after whichever branch ran — the buffer is now this
+        // effect's output whatever kind it is.
+        self.report_output(frame);
     }
 
     /// Instant-attack / slow-release peak follower, used to report the input of
@@ -844,17 +868,29 @@ impl FxProcessor {
     /// follower, it does not collapse to zero between notes the way a raw
     /// per-buffer peak does.
     fn follow_peak(&mut self, frame: &[f32]) -> f32 {
-        if frame.is_empty() {
-            return self.in_level;
-        }
-        let peak = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        self.in_level = if peak > self.in_level {
-            peak
-        } else {
-            self.in_level + (peak - self.in_level) * self.report_release
-        };
-        self.in_level
+        let release = self.report_release;
+        follow_peak_into(&mut self.in_level, frame, release)
     }
+
+    /// Publish what LEAVES this effect. A hub input further down the chain is fed by
+    /// exactly this buffer, so it lets the hub's per-input dot show the real signal
+    /// arriving at it — a source feeding a Mixer through a closed gate must read
+    /// silent there, not "the microphone is loud".
+    fn report_output(&mut self, frame: &[f32]) {
+        let release = self.report_release;
+        let out = follow_peak_into(&mut self.out_level, frame, release);
+        self.params.set_output_level(dbfs_scaled(out));
+    }
+}
+
+/// Instant-attack / slow-release peak follower over one buffer, advancing `state`.
+fn follow_peak_into(state: &mut f32, frame: &[f32], release: f32) -> f32 {
+    if frame.is_empty() {
+        return *state;
+    }
+    let peak = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    *state = if peak > *state { peak } else { *state + (peak - *state) * release };
+    *state
 }
 
 /// Apply a whole FX chain (in signal order) to one buffer in place.

@@ -43,12 +43,17 @@
 }
 
 /* Signal-meter dot: brightness = per-input level. Neutral until wired live. */
+/* Per-row signal dot. --sig is the engine's level for THIS row (0..1, dBFS-scaled
+   like every other meter); with no engine it stays 0 and the dot reads as idle.
+   Same transition as the other meters so the whole card moves as one. */
 .hub-sig {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #41434b;
+  background: color-mix(in srgb, #4ade80 calc(var(--sig, 0) * 100%), #41434b);
+  box-shadow: 0 0 6px -1px color-mix(in srgb, #4ade80 calc(var(--sig, 0) * 65%), transparent);
+  transition: background-color 120ms linear, box-shadow 120ms linear;
 }
 /* Name takes the freed space (no delete-× on this iteration); the fader is a
    fixed width shifted to the right, so names like "Telegram" fit and every

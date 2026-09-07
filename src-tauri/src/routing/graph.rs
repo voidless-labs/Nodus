@@ -273,6 +273,23 @@ pub struct FxInstance {
     pub spec: FxSpec,
 }
 
+/// A point where a route touches a Mixer/Splitter, so the hub's per-input dot can
+/// show the signal actually arriving there.
+///
+/// Resolving inlines hubs away, which is why this has to be recorded here: once the
+/// route is flat there is nothing left to say "a Mixer input lives at this edge".
+/// Note this is NOT blocked by the missing summing bus (t33) — a hub INPUT carries
+/// one source, not a sum; the summing happens after it.
+#[derive(Debug, Clone)]
+pub struct HubTap {
+    /// Edge that lands on (or leaves) the hub — the UI addresses its rows by port,
+    /// and each port maps to exactly this edge.
+    pub edge: RouteId,
+    /// Last FX before this point, whose OUTPUT is the signal here. `None` when the
+    /// signal comes straight off the source capture.
+    pub after_fx: Option<NodeId>,
+}
+
 /// Active routes visible to the engine: flattened list of (from_device_id, to_device_id, volume, muted).
 #[derive(Debug, Clone)]
 pub struct ActiveRoute {
@@ -300,6 +317,8 @@ pub struct ActiveRoute {
     pub muted: bool,
     /// Stereo balance of the final edge into the output [-1.0 .. 1.0].
     pub pan: f32,
+    /// Hub edges this route passes through, in signal order (t18 wave 6b).
+    pub hub_taps: Vec<HubTap>,
 }
 
 impl Graph {
@@ -325,6 +344,7 @@ impl Graph {
                     false,
                     Vec::new(),
                     Vec::new(),
+                    Vec::new(),
                     &mut result,
                     0,
                 );
@@ -344,17 +364,32 @@ impl Graph {
         inherited_mute: bool,
         chain: Vec<RouteId>,
         fx_chain: Vec<FxInstance>,
+        hub_taps: Vec<HubTap>,
         out: &mut Vec<ActiveRoute>,
         depth: usize,
     ) {
         if depth > 16 {
             return;
         }
+        // Edges LEAVING a splitter are hub rows too — its UI rows are its outputs.
+        // A mixer's single output carries the sum, which no row displays, so it gets
+        // no tap: publishing a figure nothing reads would only invite misreading it.
+        let from_splitter = matches!(
+            self.nodes.get(current).map(|n| &n.node_type),
+            Some(NodeType::Splitter)
+        );
         for route in self.routes_from(current) {
             let volume = inherited_volume * route.volume;
             let muted = inherited_mute || route.muted;
             let mut chain = chain.clone();
             chain.push(route.id.clone());
+            let mut hub_taps = hub_taps.clone();
+            if from_splitter {
+                hub_taps.push(HubTap {
+                    edge: route.id.clone(),
+                    after_fx: fx_chain.last().map(|f| f.node_id.clone()),
+                });
+            }
 
             if let Some(dest) = self.nodes.get(&route.to_node) {
                 match dest.node_type {
@@ -375,10 +410,18 @@ impl Graph {
                                 volume,
                                 muted,
                                 pan: route.pan,
+                                hub_taps: hub_taps.clone(),
                             });
                         }
                     }
                     NodeType::Splitter | NodeType::Mixer => {
+                        // The edge landing on the hub IS a row: a mixer input, or a
+                        // splitter's single input.
+                        let mut hub_taps = hub_taps.clone();
+                        hub_taps.push(HubTap {
+                            edge: route.id.clone(),
+                            after_fx: fx_chain.last().map(|f| f.node_id.clone()),
+                        });
                         self.collect_device_routes(
                             &dest.id,
                             source_device,
@@ -388,6 +431,7 @@ impl Graph {
                             muted,
                             chain.clone(),
                             fx_chain.clone(),
+                            hub_taps,
                             out,
                             depth + 1,
                         );
@@ -408,6 +452,7 @@ impl Graph {
                             muted,
                             chain.clone(),
                             fx_chain,
+                            hub_taps,
                             out,
                             depth + 1,
                         );
@@ -617,6 +662,76 @@ mod tests {
                 other => panic!("unexpected destination {other}"),
             }
         }
+    }
+
+    /// A hub row must be metered where its signal actually is. Source → Gate → Mixer
+    /// has to point at the GATE's output: reading the source instead would light the
+    /// row for a microphone sitting behind a shut gate.
+    #[test]
+    fn hub_taps_point_at_whatever_feeds_the_row() {
+        use crate::routing::node::{FxKind, FxSpec};
+        let mut g = Graph::new();
+        let src = make_node(NodeType::Source, "src-dev");
+        let mut gate = Node::new(NodeType::Fx, "Gate", "");
+        gate.fx = Some(FxSpec {
+            kind: FxKind::Gate,
+            bypassed: false,
+            gain_db: 0.0,
+            open_db: -45.0,
+            close_db: -55.0,
+            freq: 0.0,
+            q: 0.0,
+            eq_bands: [0.0; 5],
+            threshold_db: 0.0,
+            ceiling_db: 0.0,
+            ratio: 0.0,
+        });
+        let mixer = Node::new(NodeType::Mixer, "Mix", "");
+        let out = make_node(NodeType::Output, "out-dev");
+        let (sid, gid, mid, oid) =
+            (src.id.clone(), gate.id.clone(), mixer.id.clone(), out.id.clone());
+        g.add_node(src);
+        g.add_node(gate);
+        g.add_node(mixer);
+        g.add_node(out);
+        g.add_route(Route::new(sid, gid.clone())).unwrap();
+        let into_hub = Route::new(gid.clone(), mid.clone());
+        let into_hub_id = into_hub.id.clone();
+        g.add_route(into_hub).unwrap();
+        g.add_route(Route::new(mid, oid)).unwrap();
+
+        let routes = g.resolve_device_routes();
+        assert_eq!(routes.len(), 1);
+        let taps = &routes[0].hub_taps;
+        assert_eq!(taps.len(), 1, "one hub row on this path (the mixer input)");
+        assert_eq!(taps[0].edge, into_hub_id, "the row is addressed by its own edge");
+        assert_eq!(
+            taps[0].after_fx.as_deref(),
+            Some(gid.as_str()),
+            "metered at the gate's output, not at the source"
+        );
+    }
+
+    /// With nothing between source and hub the tap falls back to the capture.
+    #[test]
+    fn hub_tap_without_fx_reads_the_source_capture() {
+        let mut g = Graph::new();
+        let src = make_node(NodeType::Source, "src-dev");
+        let mixer = Node::new(NodeType::Mixer, "Mix", "");
+        let out = make_node(NodeType::Output, "out-dev");
+        let (sid, mid, oid) = (src.id.clone(), mixer.id.clone(), out.id.clone());
+        g.add_node(src);
+        g.add_node(mixer);
+        g.add_node(out);
+        let into_hub = Route::new(sid, mid.clone());
+        let into_hub_id = into_hub.id.clone();
+        g.add_route(into_hub).unwrap();
+        g.add_route(Route::new(mid, oid)).unwrap();
+
+        let taps = &g.resolve_device_routes()[0].hub_taps;
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].edge, into_hub_id);
+        assert!(taps[0].after_fx.is_none(), "no FX before the hub");
     }
 
     #[test]

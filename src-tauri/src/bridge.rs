@@ -447,6 +447,7 @@ pub fn setup_background_tasks(
         let mut prev_links: std::collections::HashMap<String, u8> = Default::default();
         let mut prev_fx: std::collections::HashMap<String, crate::audio::dsp::FxLevel> =
             Default::default();
+        let mut prev_hub: std::collections::HashMap<String, f32> = Default::default();
         let mut was_running = false;
         let mut last_retry = std::time::Instant::now();
         let publish = |payload: serde_json::Value, bus: &crate::daemon::EventBus| {
@@ -519,6 +520,15 @@ pub fn setup_background_tasks(
                         });
                     }
                 }
+                if !prev_hub.is_empty() {
+                    prev_hub.clear();
+                    if let Ok(payload) = serde_json::to_value(&prev_hub) {
+                        let _ = bus_levels.send(crate::daemon::ServerEvent {
+                            event: "hub-levels".into(),
+                            payload,
+                        });
+                    }
+                }
                 continue;
             }
             let levels = engine.0.get_levels();
@@ -531,6 +541,24 @@ pub fn setup_background_tasks(
                     publish(payload, &bus_levels);
                 }
                 prev = levels;
+            }
+            // Per-row signal on Mixer/Splitter nodes, keyed by edge id. Its own event
+            // for the same reason as fx-levels: these are addressed by EDGE, while
+            // volume-levels is keyed by device/exe, and merging two key spaces in one
+            // map is how a lookup silently finds the wrong thing.
+            let hub = engine.0.get_hub_levels();
+            let hub_changed = hub.len() != prev_hub.len()
+                || hub
+                    .iter()
+                    .any(|(k, v)| (prev_hub.get(k).copied().unwrap_or(-1.0) - v).abs() > 0.01);
+            if hub_changed {
+                if let Ok(payload) = serde_json::to_value(&hub) {
+                    let _ = bus_levels.send(crate::daemon::ServerEvent {
+                        event: "hub-levels".into(),
+                        payload,
+                    });
+                }
+                prev_hub = hub;
             }
             // Gain reduction per FX node, dB. Its own event rather than a key in
             // the level map: those are 0..1 meters, this is decibels, and mixing
