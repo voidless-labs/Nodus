@@ -11,6 +11,7 @@ import {
   type AudioDevice,
   type AudioProcess,
   type DeviceLinks,
+  type FxLevels,
   type VolumeLevels,
 } from '@/shared/bridge';
 
@@ -64,6 +65,8 @@ export interface Backend {
   /** Live per-output-device link health, keyed by device id (LINK_* code).
    *  A device absent from the map is online/normal. */
   links: DeviceLinks;
+  /** Live gain reduction per FX node id, in dB (0 = idle) — the GR meters. */
+  fxLevels: FxLevels;
   live: boolean;
   /** Turn the engine on/off. `onStarted` runs once the engine has started
    *  (used to push the current routing graph). No-op argument in the browser. */
@@ -76,6 +79,7 @@ export function useBackend(): Backend {
   const [processes, setProcesses] = useState<AudioProcess[]>([]);
   const [levels, setLevels] = useState<VolumeLevels>({});
   const [links, setLinks] = useState<DeviceLinks>({});
+  const [fxLevels, setFxLevels] = useState<FxLevels>({});
   const [live, setLiveState] = useState(false);
   const unsubs = useRef<Array<() => void>>([]);
 
@@ -110,6 +114,7 @@ export function useBackend(): Backend {
         await listenToEvent<AudioProcess[]>('process-changed', (p) => setProcesses(p)),
         await listenToEvent<VolumeLevels>('volume-levels', (l) => setLevels(l ?? {})),
         await listenToEvent<DeviceLinks>('device-links', (m) => setLinks(m ?? {})),
+        await listenToEvent<FxLevels>('fx-levels', (m) => setFxLevels(m ?? {})),
         // Engine on/off driven by the engine itself → every client stays in sync.
         // Raw setter (no start/stop call) so this can't loop with the broadcaster.
         await listenToEvent<boolean>('engine-state', (on) => setLiveState(!!on)),
@@ -138,5 +143,5 @@ export function useBackend(): Backend {
     }
   }, []);
 
-  return { ready, tauri: isTauri, devices, processes, levels, links, live, setLive };
+  return { ready, tauri: isTauri, devices, processes, levels, links, fxLevels, live, setLive };
 }

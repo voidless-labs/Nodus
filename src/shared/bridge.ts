@@ -43,12 +43,20 @@ export interface AudioProcess {
   source_type: SourceType;
   /** App icon extracted from the .exe as a PNG data URL (R7). null if unavailable. */
   icon?: string | null;
+  /**
+   * Does the process hold a Windows render audio session right now — i.e. can it
+   * actually produce sound? For a multi-process app this is what marks the audio
+   * process among its siblings, and the backend now reports a change here even
+   * when the pid stays the same (t31).
+   */
+  has_audio_session?: boolean;
 }
 
 export type BackendNodeType = 'source' | 'output' | 'splitter' | 'mixer' | 'virtual' | 'fx';
 
-/** Which effect an Fx node applies (t18, Wave 1). Matches Rust FxKind. */
-export type FxKind = 'gain' | 'gate' | 'eq';
+/** Which effect an Fx node applies. Matches Rust FxKind. Limiter/compressor are
+ *  UI-complete; their DSP (5-band EQ too) lands in the FX-functionality stage. */
+export type FxKind = 'gain' | 'gate' | 'eq' | 'limiter' | 'compressor';
 
 /** FX parameters — flat + named, shared shape with Rust FxSpec. Fields used per
  *  kind: gain_db (gain/eq), open_db/close_db (gate), freq/q (eq). */
@@ -60,7 +68,39 @@ export interface FxSpec {
   close_db?: number;
   freq?: number;
   q?: number;
+  /** 5-band graphic EQ gains (dB) at fixed 60/250/1k/4k/16k Hz. UI-driven; the
+   *  5-band DSP lands later (single-band biquad still uses freq/q/gain_db). */
+  eq_bands?: number[];
+  /** Limiter threshold + ceiling (dB, −40…0). Compressor reuses threshold_db + ratio. */
+  threshold_db?: number;
+  ceiling_db?: number;
+  ratio?: number;
 }
+
+/** Live telemetry of one FX node. */
+export interface FxLevel {
+  /** Gain reduction being applied right now, in **dB** (0 = idle). */
+  reduction_db: number;
+  /**
+   * The level the effect DECIDES ON, dBFS-scaled to 0..1 — compare it against the
+   * threshold on screen and you get the same verdict the DSP reached. Metering
+   * anything else here made the gate draw "closed" while it was passing audio.
+   */
+  input_level: number;
+  /** Engine's own state: gate open (passing), or dynamics actively reducing. */
+  active: boolean;
+}
+
+/**
+ * Live FX telemetry keyed by node id. Its own event rather than keys in
+ * `VolumeLevels`: an FX node has neither a device id nor an exe name, so it can
+ * never appear in that map — which is exactly why FX faces used to show a dead
+ * meter — and its reduction is in decibels, not a 0..1 level.
+ */
+export type FxLevels = Record<string, FxLevel>;
+
+/** Fixed centre frequencies of the 5-band graphic EQ (Hz). */
+export const EQ_FREQS = [60, 250, 1000, 4000, 16000] as const;
 
 export interface BackendNode {
   id: string;
@@ -107,6 +147,7 @@ export type NodusEvent =
   | 'process-changed'
   | 'volume-levels'
   | 'device-links'
+  | 'fx-levels'
   | 'engine-state';
 
 // ── Runtime detection + lazy Tauri API ──────────────────────────────────────
@@ -453,7 +494,11 @@ export interface Settings {
   start_with_windows: boolean;
   // appearance (live)
   accent: string;
+  /** Node card style: 'primary' (New Primary) | 'glass' | 'legacy'. */
+  node_style: NodeStyle;
 }
+
+export type NodeStyle = 'primary' | 'glass' | 'legacy';
 
 /** Defaults mirroring Rust `Settings::default()` — used before hydrate / offline. */
 export const DEFAULT_SETTINGS: Settings = {
@@ -466,6 +511,7 @@ export const DEFAULT_SETTINGS: Settings = {
   close_to_tray: true,
   start_with_windows: false,
   accent: '#F5C542',
+  node_style: 'primary',
 };
 
 export async function getSettings(): Promise<Settings | null> {

@@ -31,9 +31,9 @@ function streamScene(): Scene {
       name: 'Mixer',
       subtitle: 'routing engine',
       inputs: [
-        { id: 'mic', label: 'mic', volume: 0.92 },
-        { id: 'music', label: 'music', volume: 0.55 },
-        { id: 'game', label: 'game', volume: 0.8 },
+        { id: 'mic', label: 'Microphone', volume: 0.92 },
+        { id: 'music', label: 'Spotify', volume: 0.55 },
+        { id: 'game', label: 'Cyberpunk', volume: 0.8 },
       ],
       level: 0.7,
       active: true,

@@ -1,0 +1,379 @@
+/* FxNode.css — FX node faces (t28). Relies on the shared .node / .node-card /
+   .node-port / .node-head styles from NodeCard.css (always loaded via Graph);
+   defines only the FX-specific card size, substrate panel and the Gain knob. */
+
+.node--fx {
+  width: 143px;
+  --type-color: var(--color-type-fx);
+}
+.node--fx .node-card {
+  height: 195px;
+}
+.node--fx .node-icon {
+  color: var(--color-type-fx);
+}
+
+/* ── Substrate panel (FX rim = 9px, wider than the typical 7) ────── */
+.fx-panel {
+  position: absolute;
+  left: 9px;
+  top: 56px;
+  width: 125px;
+  height: 130px;
+  background: #0c0c0e;
+  border: 1px solid #17171a;
+  border-radius: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.fx-placeholder {
+  font-family: var(--font-family);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* ── Gain knob (ported 1:1 from the design book) ────────────────── */
+.knobUI {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.gc-knobwrap {
+  width: 104px;
+  height: 104px;
+  margin: 0 auto;
+  position: relative;
+}
+.knob {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  margin: 12px auto 0;
+  cursor: ns-resize;
+}
+.ktick {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: #d9d9d9;
+  border-radius: 5px;
+  transform-origin: 50% 50%;
+}
+.ktick.maj {
+  width: 1px;
+  height: 3px;
+}
+.ktick.min {
+  width: 1px;
+  height: 1.5px;
+  opacity: 0.5;
+}
+.karc {
+  position: absolute;
+  inset: 0;
+  width: 84px;
+  height: 84px;
+  pointer-events: none;
+}
+.kdial {
+  position: absolute;
+  inset: 14.5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #0f0f11 71%, #111114 100%);
+  box-shadow: 0 0 5px 3px rgba(0, 0, 0, 0.25);
+}
+.kptr {
+  position: absolute;
+  left: 50%;
+  top: 14.5px;
+  width: 2px;
+  height: 20px;
+  border-radius: 5px;
+  background: #d9d9d9;
+  transform-origin: 50% 27.5px;
+  transform: translateX(-50%) rotate(var(--rot, 0deg));
+  z-index: 2;
+  pointer-events: none;
+}
+.kptr.fx {
+  background: #fb923c;
+  box-shadow: 0 0 5px rgba(251, 146, 60, 0.4), 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.gc-val {
+  text-align: center;
+  font-family: var(--mono, var(--font-family));
+  font-size: 13px;
+  color: #fff;
+  margin: -13px 0 0;
+}
+
+/* ── Noise Gate (card 238×147, book frame 168:107) ──────────────── */
+.fx-gate-panel {
+  position: absolute;
+  left: 10px;
+  top: 53px;
+  width: 219px;
+  height: 85px;
+  background: #0c0c0e;
+  border: 1px solid #1a1a1e;
+  border-radius: 11px;
+}
+.fx-gate-gr {
+  position: absolute;
+  left: 20px;
+  top: 64px;
+  width: 200px;
+  height: 7px;
+  background: #0c0c0e;
+  border: 1px solid #252527;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fx-gate-gr-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #c0552f; /* gain reduction, live from the DSP */
+  /* Same 90ms interpolation the source-node meter uses: telemetry lands at ~15fps,
+     and without this every update is a visible jump. */
+  transition: width 90ms linear;
+}
+.fx-gate-cap {
+  position: absolute;
+  left: 20px;
+  top: 75px;
+  width: 200px;
+  height: 26px;
+  background: #0c0c0e;
+  border: 1px solid #252527;
+  border-radius: 6px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.fx-gate-vu {
+  position: absolute;
+  left: 23px;
+  top: 78px;
+  width: 194px;
+  height: 20px;
+}
+/* One bar for the whole signal. Grey below the threshold, green above it — the
+   break comes from a gradient anchored to the track, not from a second element,
+   so the two halves are the same object and cannot disagree. */
+.fx-gate-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 4px;
+  background-repeat: no-repeat;
+  transition: width 90ms linear;
+}
+.fx-gate-thr {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  cursor: ew-resize;
+  display: flex;
+}
+.fx-gate-badge {
+  position: absolute;
+  right: 13px;
+  top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #0c0c0e;
+  border: 1px solid #252527;
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-family: var(--mono, var(--font-family));
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+.fx-gate-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3a3a42;
+}
+.fx-gate-badge.is-open .fx-gate-dot {
+  background: #4ade80;
+  box-shadow: 0 0 8px 0 #4ade80;
+}
+.fx-gate-tick {
+  position: absolute;
+  width: 1px;
+  background: #777779;
+  border-radius: 1px;
+}
+.fx-gate-lab {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--mono, var(--font-family));
+  font-size: 8px;
+  color: var(--color-text-secondary);
+}
+
+/* ── 5-band graphic EQ (card 238×195, container 220×115) ────────── */
+.eq-graph {
+  position: absolute;
+  left: 9px;
+  top: 59px;
+  width: 220px;
+  height: 115px;
+  background: #0a0a0c;
+  border: 1px solid #1a1a1e;
+  border-radius: 11px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.eq-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fb923c;
+  border: 1.5px solid #0a0a0c;
+  transform: translate(-50%, -50%);
+  cursor: ns-resize;
+  z-index: 4;
+}
+.eq-lab {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--mono, var(--font-family));
+  font-size: 8px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+}
+.eq-badge {
+  position: absolute;
+  right: 13px;
+  top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0c0c0e;
+  border: 1px solid #252527;
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-family: var(--mono, var(--font-family));
+  font-size: 12px;
+}
+.eq-badge-k {
+  color: #44454b;
+}
+.eq-badge-v {
+  color: #4ade80;
+}
+
+/* ── Limiter 3-zone VU + pins (card 238×147; reuses gate panel/gr/cap/vu/scale) ─ */
+.fx-lim-z {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  /* Zone widths and offsets both follow the live level — interpolate them for the
+     same reason the gate's bars do, or the meter reads as broken at 15fps. */
+  transition: width 90ms linear, left 90ms linear;
+}
+.fx-lim-green {
+  background: #4ade80;
+  box-shadow: 0 0 7px -1px color-mix(in srgb, #4ade80 55%, transparent);
+}
+.fx-lim-amber {
+  background: #f5c542; /* semi-danger: threshold → ceiling */
+}
+.fx-lim-red {
+  background: #be542e; /* danger: above ceiling */
+}
+.fx-lim-shade {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0) 34%, rgba(0, 0, 0, 0.18) 100%);
+  pointer-events: none;
+}
+.fx-lim-pin {
+  position: absolute;
+  display: flex;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+  cursor: ew-resize;
+  /* soft dark contour so the pin reads over the coloured meter */
+  filter: drop-shadow(0 0 2.5px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.3));
+}
+.fx-lim-pin-ceil {
+  transform: translate(-50%, -50%) scaleY(-1);
+}
+
+/* ── Compressor (card 238×195, time-domain graph 220×115) ───────── */
+.comp-graph {
+  position: absolute;
+  left: 9px;
+  top: 59px;
+  width: 220px;
+  height: 115px;
+  background: #0a0a0c;
+  border: 1px solid #1a1a1e;
+  border-radius: 11px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+/* threshold end-dots straddle the container edge; drawn at card level so they
+   aren't clipped by the graph's overflow. */
+.comp-thr-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fb923c;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.comp-thr-hit {
+  position: absolute;
+  left: 9px;
+  width: 220px;
+  height: 10px;
+  cursor: ns-resize;
+  z-index: 6;
+}
+.comp-lab {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--mono, var(--font-family));
+  font-size: 8px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+}
+.comp-badge {
+  position: absolute;
+  right: 13px;
+  top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0c0c0e;
+  border: 1px solid #252527;
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-family: var(--mono, var(--font-family));
+  font-size: 12px;
+}
+.comp-badge-k {
+  color: #44454b;
+}
+.comp-badge-v {
+  color: #4ade80;
+}

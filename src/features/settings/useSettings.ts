@@ -63,6 +63,15 @@ export function useSettings(): SettingsStore {
     root.style.setProperty('--glow-accent', `0 0 18px color-mix(in srgb, ${a} 30%, transparent)`);
   }, [settings.accent]);
 
+  // Node card style (New Primary / Glass / Legacy) — a document-root attribute the
+  // node CSS keys off, so switching restyles every card live. (t28 Foundations)
+  useEffect(() => {
+    document.documentElement.setAttribute(
+      'data-node-style',
+      settings.node_style || DEFAULT_SETTINGS.node_style,
+    );
+  }, [settings.node_style]);
+
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((cur) => {
       const next = { ...cur, ...patch };

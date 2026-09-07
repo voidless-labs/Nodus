@@ -1,0 +1,176 @@
+/* FxAdvancedModal — the single "Advanced Setting" panel for an FX node (t28 Э3).
+   Centered overlay; accent inside = the effect's orange, everything else neutral. */
+.fxadv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 4, 5, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.fxadv {
+  width: 340px;
+  background: #0e0e11;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.03),
+    0 24px 60px -20px rgba(0, 0, 0, 0.75),
+    0 4px 14px -6px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  color: var(--color-text-primary);
+  animation: fxadv-in 0.14s ease-out;
+}
+@keyframes fxadv-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fxadv { animation: none; }
+}
+
+/* ── Header ── */
+.fxadv-head { display: flex; align-items: center; gap: 11px; padding: 16px 16px 14px; }
+.fxadv-ico {
+  width: 26px; height: 26px; flex: none; border-radius: 7px; background: #141416;
+  display: grid; place-items: center; color: var(--color-type-fx);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.fxadv-ico svg { width: 15px; height: 15px; }
+.fxadv-titles { flex: 1; min-width: 0; }
+.fxadv-title {
+  font-size: 14px; font-weight: 600; line-height: 1.15;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fxadv-sub {
+  font-size: 11px; color: var(--color-text-dim); line-height: 1.25; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fxadv-x {
+  width: 24px; height: 24px; flex: none; border-radius: 6px; border: 0; cursor: pointer;
+  background: transparent; color: var(--color-text-dim); display: grid; place-items: center;
+  transition: 0.15s;
+}
+.fxadv-x:hover { background: var(--color-panel-2); color: var(--color-text-secondary); }
+.fxadv-x svg { width: 13px; height: 13px; }
+.fxadv-hr { height: 1px; background: var(--color-border); border: 0; margin: 0 16px; }
+
+/* ── Section ── */
+.fxadv-sect { padding: 15px 16px 4px; }
+.fxadv-sect-lbl {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--color-text-muted); margin-bottom: 12px;
+}
+
+/* ── Param row ── */
+.fxadv-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.fxadv-row:last-child { margin-bottom: 8px; }
+.fxadv-row-lbl { font-size: 12.5px; color: var(--color-text-secondary); width: 62px; flex: none; }
+
+/* slider (native range, accent fill on the background) */
+.fxadv-slider {
+  flex: 1;
+  height: 12px;
+  margin: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.fxadv-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--color-text-primary);
+  box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.16), 0 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.fxadv-slider::-moz-range-thumb {
+  width: 12px; height: 12px; border: 0; border-radius: 50%;
+  background: var(--color-text-primary);
+  box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.16), 0 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.fxadv-slider:focus-visible { outline: none; }
+.fxadv-slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.45), 0 1px 2px rgba(0, 0, 0, 0.5); }
+
+/* numeric stepper */
+.fxadv-num {
+  flex: none; width: 84px; height: 28px; border-radius: 7px;
+  background: var(--color-node-inset); border: 1px solid var(--color-border);
+  display: flex; align-items: center; padding: 0 6px 0 8px; gap: 2px;
+}
+.fxadv-num:focus-within { border-color: rgba(251, 146, 60, 0.4); }
+.fxadv-num-input {
+  width: 40px; margin-left: auto; border: 0; background: transparent; outline: none;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; text-align: right;
+  font-variant-numeric: tabular-nums; color: var(--color-text-primary);
+}
+.fxadv-num-u { font-size: 10.5px; color: var(--color-text-dim); }
+.fxadv-num-arrows { display: flex; flex-direction: column; gap: 1px; margin-left: 3px; }
+.fxadv-num-arrows button {
+  border: 0; background: transparent; padding: 0; cursor: pointer; display: grid; place-items: center;
+  color: var(--color-text-muted); transition: color 0.12s;
+}
+.fxadv-num-arrows button:hover { color: var(--color-text-secondary); }
+.fxadv-num-arrows svg { width: 9px; height: 6px; display: block; }
+
+/* ── Toggle ── */
+/* Read-only gain-reduction readout (compressor / limiter). Matches the toggle
+   rows' rhythm, but is an indicator rather than a control. */
+.fxadv-gr-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.fxadv-gr-txt { font-size: 12.5px; color: var(--color-text-secondary); flex: none; }
+.fxadv-gr-bar {
+  flex: 1; height: 4px; border-radius: 2px; background: var(--color-vu-track);
+  overflow: hidden; min-width: 60px;
+}
+.fxadv-gr-bar i {
+  display: block; height: 100%; background: #c0552f;
+  transition: width 90ms linear;
+}
+.fxadv-gr-val {
+  font-size: 11.5px; color: var(--color-text-muted); flex: none;
+  min-width: 62px; text-align: right; font-variant-numeric: tabular-nums;
+}
+
+.fxadv-tgl-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.fxadv-tgl-txt { font-size: 12.5px; color: var(--color-text-secondary); }
+.fxadv-tgl {
+  width: 34px; height: 19px; border-radius: 11px; background: var(--color-vu-track);
+  position: relative; cursor: pointer; transition: 0.18s; flex: none; border: 0; padding: 0;
+}
+.fxadv-tgl::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+  border-radius: 50%; background: var(--color-text-secondary); transition: 0.18s;
+}
+.fxadv-tgl.is-on { background: rgba(251, 146, 60, 0.14); box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.3); }
+.fxadv-tgl.is-on::after { left: 17px; background: var(--color-type-fx); }
+
+/* ── Segmented ── */
+.fxadv-seg-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.fxadv-seg-txt { font-size: 12.5px; color: var(--color-text-secondary); }
+.fxadv-seg {
+  display: flex; background: var(--color-node-inset); border: 1px solid var(--color-border);
+  border-radius: 8px; padding: 2px; gap: 2px;
+}
+.fxadv-seg button {
+  border: 0; background: transparent; cursor: pointer; font-family: inherit;
+  font-size: 11.5px; font-weight: 500; color: var(--color-text-dim);
+  padding: 4px 9px; border-radius: 6px; font-variant-numeric: tabular-nums; transition: 0.14s;
+}
+.fxadv-seg button.is-on {
+  background: rgba(251, 146, 60, 0.13); color: var(--color-type-fx);
+  box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.3);
+}
+
+/* ── Footer ── */
+.fxadv-foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 15px; }
+.fxadv-reset {
+  display: flex; align-items: center; gap: 6px; background: transparent; border: 0; cursor: pointer;
+  font-family: inherit; font-size: 12px; color: var(--color-text-dim); transition: 0.15s;
+}
+.fxadv-reset:hover { color: var(--color-text-secondary); }
+.fxadv-reset svg { width: 12px; height: 12px; }
+.fxadv-foot-hint { font-size: 11px; color: var(--color-text-muted); }

@@ -18,7 +18,6 @@ export function HubNode({
   search,
   actions,
   chainState,
-  onRemoveInput,
   onInputVolume,
   onSolo,
   onPin,
@@ -26,6 +25,8 @@ export function HubNode({
   onDuplicate,
   onDelete,
   onRename,
+  inSourceColorVars,
+  outConnectedPorts,
 }: {
   hub: HubModel;
   search?: 'match' | 'dim';
@@ -43,10 +44,30 @@ export function HubNode({
   onDuplicate?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, name: string) => void;
+  /**
+   * IN ports carry the accent of the node feeding them — a hub input can come
+   * from a source, an FX, a virtual device or another hub. Keyed by port id;
+   * '' is the single fixed port (the splitter's input). Missing ⇒ not wired,
+   * so the port stays neutral, exactly as on a leaf node. (t28 ports)
+   */
+  inSourceColorVars?: Record<string, string>;
+  /** Per-port: does this OUT port carry an edge? Keyed like the above. */
+  outConnectedPorts?: Record<string, boolean>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
   const split = (hub.role ?? 'mixer') === 'splitter';
+
+  /** Paint an IN port with the accent of whatever feeds it (same recipe as NodeCard). */
+  const inPortStyle = (portId: string) => {
+    const v = inSourceColorVars?.[portId];
+    return v
+      ? {
+          background: `var(${v})`,
+          boxShadow: `0 0 9px -1px color-mix(in srgb, var(${v}) 60%, transparent)`,
+        }
+      : undefined;
+  };
 
   const onGlowMove = (e: React.MouseEvent) => {
     if (rafRef.current != null) return;
@@ -77,17 +98,22 @@ export function HubNode({
 
   const ports = (
     <div className="hub-inputs">
-      <div className="hub-inputs-h">
-        {split ? 'outputs' : 'inputs'} · {hub.inputs.length}
-      </div>
       {hub.inputs.map((p) => (
         <div className="hub-in-row" key={p.id}>
           <span
-            className={`node-port ${split ? 'hub-port-out-row' : 'hub-port-in'}`}
+            className={
+              split
+                ? `node-port hub-port-out-row${
+                    outConnectedPorts?.[p.id] === false ? ' is-unconnected' : ''
+                  }`
+                : 'node-port hub-port-in'
+            }
             data-node={hub.id}
             data-side={split ? 'out' : 'in'}
             data-port={p.id}
+            style={split ? undefined : inPortStyle(p.id)}
           />
+          <span className="hub-sig" aria-hidden />
           <span className="hub-in-name">{p.label}</span>
           <VolumeSlider
             className="hub-slider"
@@ -95,41 +121,29 @@ export function HubNode({
             onChange={onInputVolume ? (v) => onInputVolume(hub.id, p.id, v) : undefined}
             ariaLabel={`${p.label} level`}
           />
-          <button
-            className="hub-in-x"
-            aria-label={`remove ${p.label}`}
-            title="remove"
-            onClick={() => onRemoveInput?.(hub.id, p.id)}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
         </div>
       ))}
 
-      {/* Trailing "ghost" port: mixer = drop a source here; splitter = drag from here. */}
+      {/* Mixer Slot (concept E, 1.25×) — a dashed drop-box (＋ + hint) plus the edge
+          phantom-port nub. The whole box is the drop (mixer) / drag (splitter) target. */}
       <div className="hub-in-row hub-add-row">
-        <span
-          className={`node-port hub-port-add ${split ? 'hub-port-add-out' : ''}`}
-          data-node={hub.id}
-          data-side={split ? 'out' : 'in'}
-          data-add="1"
-        >
-          <svg className="hub-add-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
+        <span className="hub-add-nub" aria-hidden>
+          <svg className="hub-nub-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
             <path d="M12 6v12M6 12h12" />
           </svg>
         </span>
-        <span className="hub-add-hint">{split ? 'drag to a target' : 'drag a source here'}</span>
-      </div>
-    </div>
-  );
-
-  const meter = (label: string) => (
-    <div className="hub-out">
-      <span className="hub-out-label">{label}</span>
-      <div className="hub-meter" aria-hidden>
-        <div className="hub-meter-fill" style={{ width: `${hub.level * 100}%` }} />
+        <span
+          className="node-port hub-port-add"
+          data-node={hub.id}
+          data-side={split ? 'out' : 'in'}
+          data-add="1"
+        />
+        <span className="hub-add-box">
+          <svg className="hub-add-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden>
+            <path d="M12 6v12M6 12h12" />
+          </svg>
+          <span className="hub-add-hint">{split ? 'Drag to a target' : 'Drag a source here'}</span>
+        </span>
       </div>
     </div>
   );
@@ -159,9 +173,22 @@ export function HubNode({
 
         {/* The single fixed port: mixer's mix-output (right) or splitter's input (left). */}
         {split ? (
-          <span className="node-port hub-port-in-single" data-node={hub.id} data-side="in" data-port="" />
+          <span
+            className="node-port hub-port-in-single"
+            data-node={hub.id}
+            data-side="in"
+            data-port=""
+            style={inPortStyle('')}
+          />
         ) : (
-          <span className="node-port hub-port-out" data-node={hub.id} data-side="out" data-port="" />
+          <span
+            className={`node-port hub-port-out${
+              outConnectedPorts?.[''] === false ? ' is-unconnected' : ''
+            }`}
+            data-node={hub.id}
+            data-side="out"
+            data-port=""
+          />
         )}
 
         <div className="node-head">
@@ -178,17 +205,7 @@ export function HubNode({
           </div>
         </div>
 
-        {split ? (
-          <>
-            {meter('in')}
-            {ports}
-          </>
-        ) : (
-          <>
-            {ports}
-            {meter('mix')}
-          </>
-        )}
+        {ports}
       </div>
     </div>
   );

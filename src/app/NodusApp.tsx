@@ -12,6 +12,7 @@ import {
 } from '@/shared/bridge';
 import { Canvas } from '@/features/nodes/ui/Canvas';
 import { Graph } from '@/features/nodes/ui/Graph';
+import { FxAdvancedModal } from '@/features/nodes/ui/FxAdvancedModal';
 import { Topbar } from '@/features/topbar/Topbar';
 import { EngineButton } from '@/features/topbar/EngineButton';
 import { BottomBar } from '@/features/devices/BottomBar';
@@ -58,6 +59,7 @@ export default function NodusApp() {
   const settingsCtl = useSettings();
   const [setupOpen, setSetupOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [advancedFxId, setAdvancedFxId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const canvasAreaRef = useRef<HTMLDivElement>(null);
   const viewCtl = useView(canvasAreaRef);
@@ -465,6 +467,7 @@ export default function NodusApp() {
               hubs={scene.hubs}
               search={search}
               levels={backend.levels}
+              fxLevels={backend.fxLevels}
               links={backend.links}
               presentDevices={presentDevices}
               runningApps={runningApps}
@@ -487,6 +490,7 @@ export default function NodusApp() {
               onEdgeMute={store.setEdgeMute}
               onEdgePan={store.setEdgePan}
               onFxParams={store.setNodeFx}
+              onFxAdvanced={setAdvancedFxId}
               onRemoveEdge={store.removeEdge}
               onRemoveHubInput={store.removeHubInput}
               onHubInputVolume={store.setHubInputVolume}
@@ -543,6 +547,19 @@ export default function NodusApp() {
             onClose={() => setSettingsOpen(false)}
           />
         )}
+        {(() => {
+          if (!advancedFxId) return null;
+          const fxNode = scene.nodes.find((n) => n.id === advancedFxId && n.kind === 'fx' && n.fx);
+          if (!fxNode) return null;
+          return (
+            <FxAdvancedModal
+              node={fxNode}
+              onChange={store.setNodeFx}
+              onClose={() => setAdvancedFxId(null)}
+              reductionDb={backend.fxLevels[fxNode.id]?.reduction_db ?? 0}
+            />
+          );
+        })()}
       </div>
       {quickOpen && (
         <QuickPanel

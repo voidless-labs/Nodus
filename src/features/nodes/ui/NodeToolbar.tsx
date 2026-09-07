@@ -6,6 +6,7 @@
  * the card so it scales with the node under zoom, like the mute/slider controls.
  */
 export function NodeToolbar({
+  onAdvanced,
   onSolo,
   soloActive,
   onPin,
@@ -13,6 +14,8 @@ export function NodeToolbar({
   onDuplicate,
   onDelete,
 }: {
+  /** Open the FX Advanced Setting modal (FX nodes only, t28). */
+  onAdvanced?: () => void;
   onSolo?: () => void;
   soloActive?: boolean;
   /** Pin/unpin to the quick-controls popup (t13). */
@@ -23,6 +26,16 @@ export function NodeToolbar({
 }) {
   return (
     <div className="node-toolbar" role="toolbar" aria-label="node actions">
+      {onAdvanced && (
+        <button
+          className="node-tb-btn"
+          title="advanced settings"
+          aria-label="advanced settings"
+          onClick={onAdvanced}
+        >
+          <IconAdvanced />
+        </button>
+      )}
       {onSolo && (
         <button
           className={`node-tb-btn ${soloActive ? 'is-active' : ''}`}
@@ -71,6 +84,14 @@ const IC = {
   strokeLinejoin: 'round' as const,
 };
 
+function IconAdvanced() {
+  // Sliders glyph — matches the "advanced settings" affordance.
+  return (
+    <svg {...IC}>
+      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+    </svg>
+  );
+}
 function IconSolo() {
   return (
     <svg {...IC}>

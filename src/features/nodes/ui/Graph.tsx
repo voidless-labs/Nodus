@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './Graph.css';
 import { NodeCard } from '@/features/nodes/ui/NodeCard';
+import { FxNode } from '@/features/nodes/ui/FxNode';
 import { HubNode } from '@/features/nodes/ui/HubNode';
 import { EdgePopover } from '@/features/nodes/ui/EdgePopover';
-import { FxPopover } from '@/features/nodes/ui/FxPopover';
 import type { FxSpec } from '@/shared/bridge';
 import type { EdgeModel, HubModel, LinkStatus, NodeModel } from '@/features/nodes/types';
+import { KIND_COLOR_VAR } from '@/features/nodes/types';
 import { LINK_OFFLINE, LINK_ONLINE, LINK_RECONNECTING } from '@/shared/bridge';
 import { soloSets } from '@/features/nodes/routingGraph';
 import type { View } from '@/shared/hooks/useView';
@@ -75,6 +76,7 @@ export function Graph({
   hubs = [],
   search = '',
   levels = {},
+  fxLevels = {},
   links = {},
   presentDevices,
   runningApps,
@@ -94,6 +96,7 @@ export function Graph({
   onEdgeMute,
   onEdgePan,
   onFxParams,
+  onFxAdvanced,
   onRemoveEdge,
   onRemoveHubInput,
   onHubInputVolume,
@@ -109,6 +112,8 @@ export function Graph({
   search?: string;
   /** Live per-source levels from the engine (keyed by device id / exe name). */
   levels?: Record<string, number>;
+  /** Live FX telemetry per node id: decision level, gain reduction, engine state. */
+  fxLevels?: Record<string, { reduction_db: number; input_level: number; active: boolean }>;
   /** Live per-output-device link health, keyed by device id (LINK_* code). */
   links?: Record<string, number>;
   /** Ids of devices currently present (enumerated) — for the node status dot. */
@@ -138,6 +143,7 @@ export function Graph({
   onEdgePan?: (id: string, pan: number) => void;
   /** Live FX parameter change from the FX inspector (t18). */
   onFxParams?: (id: string, fx: FxSpec) => void;
+  onFxAdvanced?: (id: string) => void;
   onRemoveEdge?: (id: string) => void;
   /** Dynamic hub ports (R24). */
   onRemoveHubInput?: (hubId: string, inputId: string) => void;
@@ -463,6 +469,35 @@ export function Graph({
     [nodes, hubs, edges],
   );
   const anySolo = soloChain.size > 0;
+
+  // Per-port route colouring (t28): a node's OUT is "connected" if it feeds any
+  // edge; its IN shows the SOURCE node's accent (first incoming edge). Sources may
+  // be nodes or hubs → one id→accent-var map covers both.
+  const portConn = useMemo(() => {
+    const kindVar: Record<string, string> = {};
+    nodes.forEach((n) => (kindVar[n.id] = KIND_COLOR_VAR[n.kind]));
+    hubs.forEach((h) => (kindVar[h.id] = KIND_COLOR_VAR.hub));
+    const inFrom: Record<string, string> = {};
+    const outHas = new Set<string>();
+    // Endpoints of at least one edge — the nodes that actually take part in a
+    // routing chain. Needed for the live meter: see the note at its use site.
+    const wired = new Set<string>();
+    // Hubs are wired per PORT, not per node: a mixer row and a splitter row are
+    // each their own port, so their accents must be resolved per port. Keyed
+    // `${nodeId}:${portId}`, where '' is the single fixed port. (t28 ports)
+    const inFromPort: Record<string, string> = {};
+    const outHasPort = new Set<string>();
+    for (const e of edges) {
+      if (!(e.to in inFrom)) inFrom[e.to] = e.from;
+      outHas.add(e.from);
+      wired.add(e.from);
+      wired.add(e.to);
+      const inKey = `${e.to}:${e.toPort ?? ''}`;
+      if (!(inKey in inFromPort)) inFromPort[inKey] = e.from;
+      outHasPort.add(`${e.from}:${e.fromPort ?? ''}`);
+    }
+    return { kindVar, inFrom, outHas, wired, inFromPort, outHasPort };
+  }, [nodes, hubs, edges]);
   // 'on' = part of the audible chain, 'off' = dimmed (muted by solo), undefined = no solo.
   const chainState = (id: string): 'on' | 'off' | undefined =>
     anySolo ? (soloChain.has(id) ? 'on' : 'off') : undefined;
@@ -521,26 +556,49 @@ export function Graph({
           )}
         </svg>
 
-        {hubs.map((h) => (
-          <HubNode
-            key={h.id}
-            hub={selection.has(h.id) ? { ...h, selected: true } : h}
-            search={searchFor(h.name, search)}
-            actions={h.id === soleSelected}
-            chainState={chainState(h.id)}
-            onRemoveInput={onRemoveHubInput}
-            onInputVolume={onHubInputVolume}
-            onSolo={onNodeSolo}
-            onDuplicate={onNodeDuplicate}
-            onDelete={onNodeDelete}
-            onRename={onNodeRename}
-            onPin={onPin}
-            pinned={pinned?.has(h.id)}
-          />
-        ))}
+        {hubs.map((h) => {
+          // A hub port's colour follows what is actually wired to it: IN takes the
+          // accent of the feeding node — which may be a source, an FX, a virtual
+          // device or another hub, so it cannot be the fixed "source" colour the
+          // CSS used to assume — and OUT is the hub's own accent, muted while
+          // nothing is wired. Resolved per port id; '' is the single fixed port.
+          const inSourceColorVars: Record<string, string> = {};
+          const outConnectedPorts: Record<string, boolean> = {};
+          const resolvePort = (portId: string) => {
+            const from = portConn.inFromPort[`${h.id}:${portId}`];
+            if (from && portConn.kindVar[from]) inSourceColorVars[portId] = portConn.kindVar[from];
+            outConnectedPorts[portId] = portConn.outHasPort.has(`${h.id}:${portId}`);
+          };
+          h.inputs.forEach((p) => resolvePort(p.id));
+          resolvePort(''); // the single fixed port (mixer mix-out / splitter in)
+          return (
+            <HubNode
+              key={h.id}
+              hub={selection.has(h.id) ? { ...h, selected: true } : h}
+              search={searchFor(h.name, search)}
+              actions={h.id === soleSelected}
+              chainState={chainState(h.id)}
+              onRemoveInput={onRemoveHubInput}
+              onInputVolume={onHubInputVolume}
+              onSolo={onNodeSolo}
+              onDuplicate={onNodeDuplicate}
+              onDelete={onNodeDelete}
+              onRename={onNodeRename}
+              onPin={onPin}
+              pinned={pinned?.has(h.id)}
+              inSourceColorVars={inSourceColorVars}
+              outConnectedPorts={outConnectedPorts}
+            />
+          );
+        })}
         {nodes.map((n) => {
-          // Live meter: the engine reports levels by device id or exe name.
-          const live = (n.deviceId && levels[n.deviceId]) ?? (n.exeName && levels[n.exeName]);
+          // Live meter: the engine reports levels per device id / exe name, never
+          // per node — so a second card for the same app or device would mirror the
+          // meter of the one that is actually routed. Only a node wired into the
+          // graph can carry audio, so only a wired node shows a live level.
+          const live = portConn.wired.has(n.id)
+            ? (n.deviceId && levels[n.deviceId]) ?? (n.exeName && levels[n.exeName])
+            : undefined;
           // Live connection status shown persistently on the node (t19).
           const status = nodeStatus(n, links, presentDevices ?? EMPTY_SET, runningApps ?? EMPTY_SET);
           const node = {
@@ -548,6 +606,34 @@ export function Graph({
             ...(typeof live === 'number' ? { level: live } : null),
             selected: n.selected || selection.has(n.id),
           };
+          if (n.kind === 'fx') {
+            return (
+              <FxNode
+                key={n.id}
+                node={node}
+                status={status}
+                search={searchFor(n.name, search)}
+                actions={n.id === soleSelected}
+                chainState={chainState(n.id)}
+                soloSkipped={isSoloSkipped(n)}
+                onSolo={onNodeSolo}
+                onDuplicate={onNodeDuplicate}
+                onDelete={onNodeDelete}
+                onRename={onNodeRename}
+                onPin={onPin}
+                pinned={pinned?.has(n.id)}
+                onFxParams={onFxParams}
+                onAdvanced={onFxAdvanced}
+                outConnected={portConn.outHas.has(n.id)}
+                inSourceColorVar={
+                  portConn.inFrom[n.id] ? portConn.kindVar[portConn.inFrom[n.id]] : undefined
+                }
+                reductionDb={fxLevels[n.id]?.reduction_db ?? 0}
+                inputLevel={fxLevels[n.id]?.input_level}
+                active={fxLevels[n.id]?.active}
+              />
+            );
+          }
           return (
             <NodeCard
               key={n.id}
@@ -569,19 +655,13 @@ export function Graph({
               onRename={onNodeRename}
               onPin={onPin}
               pinned={pinned?.has(n.id)}
+              outConnected={portConn.outHas.has(n.id)}
+              inSourceColorVar={
+                portConn.inFrom[n.id] ? portConn.kindVar[portConn.inFrom[n.id]] : undefined
+              }
             />
           );
         })}
-
-        {/* FX inspector for the selected FX node — anchored in world space (t18). */}
-        {(() => {
-          const fxNode = soleSelected
-            ? nodes.find((n) => n.id === soleSelected && n.kind === 'fx' && n.fx)
-            : undefined;
-          return fxNode && onFxParams ? (
-            <FxPopover node={fxNode} onChange={(fx) => onFxParams(fxNode.id, fx)} />
-          ) : null;
-        })()}
       </div>
 
       {marquee && (

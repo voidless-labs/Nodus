@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getServerInfo, openExternal, type Settings, type ServerInfo } from '@/shared/bridge';
+import { getServerInfo, openExternal, type Settings, type ServerInfo, type NodeStyle } from '@/shared/bridge';
 import pkg from '../../../package.json';
 import './SettingsModal.css';
 
@@ -12,6 +12,13 @@ const ACCENTS: { id: string; hex: string; name: string }[] = [
   { id: 'pink', hex: '#F472B6', name: 'Pink' },
   { id: 'red', hex: '#FB7185', name: 'Red' },
   { id: 'teal', hex: '#2DD4BF', name: 'Teal' },
+];
+
+/** Node card styles — the card surface applied to every node on the canvas. */
+const NODE_STYLES: { id: NodeStyle; name: string; hint: string }[] = [
+  { id: 'primary', name: 'Primary', hint: 'Flat, strict — the default.' },
+  { id: 'glass', name: 'Glass', hint: 'Translucent, blurred, accent bloom.' },
+  { id: 'legacy', name: 'Legacy', hint: 'The pre-redesign solid card.' },
 ];
 
 const REPO_URL = 'https://github.com/voidless-labs/Nodus';
@@ -80,21 +87,41 @@ export function SettingsModal({
 
           <div className="settings-pane">
             {tab === 'appearance' && (
-              <Row label="Accent color" hint="Tints buttons, selection and meters.">
-                <div className="settings-swatches">
-                  {ACCENTS.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      className={`settings-swatch${settings.accent === a.hex ? ' is-on' : ''}`}
-                      style={{ background: a.hex }}
-                      aria-label={a.name}
-                      title={a.name}
-                      onClick={() => onUpdate({ accent: a.hex })}
-                    />
-                  ))}
-                </div>
-              </Row>
+              <>
+                <Row label="Accent color" hint="Tints buttons, selection and meters.">
+                  <div className="settings-swatches">
+                    {ACCENTS.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={`settings-swatch${settings.accent === a.hex ? ' is-on' : ''}`}
+                        style={{ background: a.hex }}
+                        aria-label={a.name}
+                        title={a.name}
+                        onClick={() => onUpdate({ accent: a.hex })}
+                      />
+                    ))}
+                  </div>
+                </Row>
+                <Row
+                  label="Node style"
+                  hint={NODE_STYLES.find((s) => s.id === settings.node_style)?.hint}
+                >
+                  <div className="settings-seg" role="group" aria-label="Node style">
+                    {NODE_STYLES.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`settings-seg-btn${settings.node_style === s.id ? ' is-on' : ''}`}
+                        aria-pressed={settings.node_style === s.id}
+                        onClick={() => onUpdate({ node_style: s.id })}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </Row>
+              </>
             )}
 
             {tab === 'performance' && (

@@ -137,7 +137,11 @@ function defaultFxSpec(typeId: string): NodeModel['fx'] | undefined {
     case 'gate':
       return { kind: 'gate', bypassed: false, open_db: -45, close_db: -55 };
     case 'eq':
-      return { kind: 'eq', bypassed: false, freq: 1000, q: 1, gain_db: 0 };
+      return { kind: 'eq', bypassed: false, freq: 1000, q: 1, gain_db: 0, eq_bands: [0, 0, 0, 0, 0] };
+    case 'limiter':
+      return { kind: 'limiter', bypassed: false, threshold_db: -12, ceiling_db: -1 };
+    case 'comp': // catalog id is 'comp'; the FxKind is 'compressor'
+      return { kind: 'compressor', bypassed: false, threshold_db: -18, ratio: 4 };
     default:
       return undefined;
   }
@@ -852,11 +856,11 @@ export function useScene(live: boolean): SceneStore {
   // ── Dynamic hub inputs (R24) ───────────────────────────────────────────
   // Auto-grow: dragging a source onto a hub's trailing "ghost" port materialises
   // a new input AND connects to it in one step (a fresh ghost then renders below).
+  // A hub input takes the SOURCE node's name verbatim (original case) — "Spotify",
+  // not "spotify". Display truncation is the row's job (CSS ellipsis), not here.
   const labelOf = (id: string): string => {
     const s = sceneRef.current;
-    return (s.nodes.find((n) => n.id === id)?.name ?? s.hubs.find((h) => h.id === id)?.name ?? 'node')
-      .toLowerCase()
-      .slice(0, 10);
+    return s.nodes.find((n) => n.id === id)?.name ?? s.hubs.find((h) => h.id === id)?.name ?? 'node';
   };
   const portFree = (side: 'out' | 'in', node: string, port?: string): boolean =>
     !sceneRef.current.edges.some((e) =>

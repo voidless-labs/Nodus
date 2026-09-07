@@ -1,220 +1,230 @@
-/* HubNode.css — the "Stream Mix" node. Reuses the polished .node-card; adds a
-   per-input volume list (mixer body) and the mix output.
-   Dimensions reduced ~1.5x to match the smaller NodeCard (R21 follow-up). */
+/* HubNode.css — Mixer / Splitter, ported to the design book (t28).
+   New Primary card; a substrate panel holds per-input rows (signal-dot + name +
+   fader); 13px edge ports (one per row on the dynamic side, one fixed on the
+   other). IN = source colour, OUT = own routing accent (blue). */
 
 .node--hub {
-  width: 196px; /* same width as every other node */
+  width: 196px;
   --type-color: var(--color-type-hub);
 }
 .node--hub .node-icon {
   color: var(--color-type-hub);
 }
+/* The hub grows with its rows (variable N) → auto height. The label sits absolute
+   at 13/16 (base rule); the substrate begins at y61 (rim 7 left/right/bottom). */
+.node--hub .node-card {
+  height: auto;
+  padding: 61px 7px 7px;
+}
 
-/* ── Inputs list on a recessed panel (like the "input level" block) ─ */
+/* ── Substrate panel holding the input/output rows ──────────────── */
 .hub-inputs {
-  margin-top: 10px;
-  padding: 7px 8px 8px;
-  background: var(--color-node-inset);
-  border: 1px solid var(--color-node-inset-border);
-  border-radius: 7px;
-}
-.hub-inputs-h {
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  margin: 0 0 7px 1px;
+  /* positioned so it paints ABOVE the glass card's accent bloom (which is an
+     absolute ::before). Without this the static panel sits under the bloom and
+     picks up a glassy tint — the Source panel avoids it by being absolute. */
+  position: relative;
+  z-index: 0;
+  background: #0c0c0e;
+  border: 1px solid #17171a;
+  border-radius: 9px;
+  padding: 15px 11px;
 }
 
-/* Ghost "add" input: always one trailing inactive port. A faint dashed circle
-   with a "+" — subtle, but enough to read as a drop target; brightens on hover. */
-.hub-add-row {
-  opacity: 0.7;
-}
-.hub-add-row:hover {
-  opacity: 1;
-}
-.node-port.hub-port-add {
-  position: absolute;
-  left: -27px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 13px;
-  height: 13px;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  /* inactive look: muted dashed ring (not the active green) */
-  border: 1px dashed var(--color-text-muted);
-  box-shadow: none;
-  color: var(--color-text-dim);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
-    color var(--transition-fast);
-}
-/* "+" as a crisp SVG (viewBox-centred, no subpixel drift). */
-.hub-add-plus {
-  width: 7px;
-  height: 7px;
-  pointer-events: none;
-}
-/* hover = valid drop target: turn green. */
-.hub-add-row:hover .hub-port-add {
-  border-color: var(--color-type-source);
-  border-style: solid;
-  color: var(--color-type-source);
-  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
-}
-.hub-add-hint {
-  font-size: 9.5px;
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-.hub-in-x {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-dim);
-  border-radius: 50%;
-  cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-.hub-in-x:hover {
-  color: #f0a0a0;
-  background: rgba(127, 46, 46, 0.16);
-}
 .hub-in-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 7px;
-  position: relative;
+  height: 10px;
+  margin-bottom: 22px;
 }
 .hub-in-row:last-child {
   margin-bottom: 0;
 }
-.hub-in-name {
-  flex: 0 0 28px;
-  font-size: 10px;
-  color: var(--color-text-secondary);
+
+/* Signal-meter dot: brightness = per-input level. Neutral until wired live. */
+.hub-sig {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #41434b;
 }
-.hub-slider {
+/* Name takes the freed space (no delete-× on this iteration); the fader is a
+   fixed width shifted to the right, so names like "Telegram" fit and every
+   fader still aligns in one column. */
+.hub-in-name {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-/* input connection nubs ride the card's left edge, one per row */
-.node-port.hub-port-in {
-  position: absolute;
-  left: -27px; /* card pad (12) + inset pad (8) → centered on the card's outer edge */
-  top: 50%;
-  transform: translateY(-50%);
-  width: 9px;
-  height: 9px;
-  background: var(--color-type-source);
-  border: 2px solid var(--color-canvas);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
-}
-
-/* ── Mix output ───────────────────────────────────────────────── */
-.hub-out {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--color-border);
-}
-.hub-out-label {
-  flex: 0 0 auto;
   font-size: 10px;
   color: var(--color-text-secondary);
+  white-space: nowrap;
+  /* Clip ONLY horizontally (for the ellipsis); keep vertical VISIBLE so the
+     ascenders/descenders (f, g, y, j…) are never clipped by the trimmed text-box.
+     overflow-x:clip + overflow-y:visible is a legal pair (unlike hidden). */
+  overflow-x: clip;
+  overflow-y: visible;
+  text-overflow: ellipsis;
+  /* Align by the x-HEIGHT band (baseline → x-height) — the visual centre of round
+     lowercase letters (o, e, c), i.e. letters WITHOUT tails. Font-metric based, so
+     it holds for any font AND for words where every letter has a tail (x-height is
+     a font constant, not derived from the present glyphs). (t28 row-alignment.) */
+  text-box-trim: trim-both;
+  text-box-edge: ex alphabetic;
 }
-.hub-meter {
-  flex: 1 1 auto;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.35);
-  overflow: hidden;
-}
-.hub-meter-fill {
-  height: 100%;
-  border-radius: 2px;
-  background: var(--color-accent);
-  box-shadow: 0 0 5px -1px var(--color-accent);
-  transition: width 90ms linear;
-}
-.node-port.hub-port-out {
-  position: absolute;
-  right: -5px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  border: 2px solid var(--color-canvas);
-  box-shadow: 0 0 8px -1px var(--color-accent);
+.hub-slider {
+  flex: 0 0 88px;
 }
 
-/* ── Splitter (mirror of the mixer): 1 input → N outputs ───────── */
-.node--splitter {
-  --type-color: var(--color-type-hub);
-}
-/* dynamic OUTPUT nubs ride the card's RIGHT edge, one per row */
+/* ── Per-row edge ports (13px), straddling the card edge, row-aligned ── */
+.node-port.hub-port-in,
 .node-port.hub-port-out-row {
   position: absolute;
-  right: -27px;
   top: 50%;
-  transform: translateY(-50%);
-  width: 9px;
-  height: 9px;
-  background: var(--color-type-output);
-  border: 2px solid var(--color-canvas);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-output) 60%, transparent);
-}
-/* the ghost "add output" sits on the right, and you drag FROM it */
-.node-port.hub-port-add.hub-port-add-out {
-  left: auto;
-  right: -27px;
-}
-.node--splitter .hub-add-row:hover .hub-port-add {
-  border-color: var(--color-type-output);
-  border-style: solid;
-  color: var(--color-type-output);
-  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-output) 60%, transparent);
-}
-/* the single input nub on the left, vertically centred (mirror of mix-output) */
-.node-port.hub-port-in-single {
-  position: absolute;
-  left: -5px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 9px;
-  height: 9px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: var(--color-type-source);
   border: 2px solid var(--color-canvas);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--color-type-source) 60%, transparent);
+  transform: translateY(-50%);
+}
+.node-port.hub-port-in {
+  /* mixer input — left card edge. Neutral until wired; the accent of the node
+     that feeds this port is applied inline (it may be a source, an FX, a virtual
+     device or another hub, so it cannot be hard-coded here). */
+  left: -25.5px;
+  background: var(--color-edge-idle);
+}
+.node-port.hub-port-out-row {
+  /* splitter output — right card edge, own accent */
+  right: -25.5px;
+  background: var(--color-type-hub);
+  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-hub) 60%, transparent);
 }
 
-/* ── States ───────────────────────────────────────────────────── */
-.node--hub.is-active .node-card {
-  box-shadow: var(--shadow-node), 0 0 20px -6px color-mix(in srgb, var(--color-type-hub) 45%, transparent);
+/* ── Mixer Slot (concept E, 1.25×) — dashed drop-box + edge phantom-port nub ── */
+.hub-add-row {
+  position: relative;
+  height: 16px;
+  margin-top: 0;
+  margin-bottom: 0;
 }
-.node--hub.is-selected .node-card {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent);
+/* the visible dashed box (empty drop zone: ＋ + hint, no meter/name/fader) */
+.hub-add-box {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--color-text-muted) 75%, transparent);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-family: var(--font-family);
+  font-size: 9.5px;
+  font-style: italic;
+  pointer-events: none; /* the invisible port over it handles the drop */
+  transition: border-color var(--transition-fast), color var(--transition-fast);
 }
-.node--hub.is-search-match .node-card {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent),
-    0 0 22px -6px color-mix(in srgb, var(--color-accent) 45%, transparent);
+.hub-add-plus {
+  width: 10px;
+  height: 10px;
 }
-.node--hub.is-search-dim {
-  opacity: 0.32;
-  transition: opacity var(--transition-fast);
+.hub-add-hint {
+  line-height: 1;
+}
+/* edge phantom-port nub (dashed circle with a ＋, echoing a channel's IN port) */
+.hub-add-nub {
+  position: absolute;
+  left: -25.5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px dashed var(--color-text-muted);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-dim);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+.hub-nub-plus {
+  width: 7px;
+  height: 7px;
+  pointer-events: none;
+}
+.node--splitter .hub-add-nub {
+  left: auto;
+  right: -25.5px;
+}
+/* The drop (mixer) / drag (splitter) target — invisible, and deliberately larger
+   than the dashed box: it has to reach the edge nub, because that "+" is what a
+   user actually aims a wire at. Until it did, the nub was purely decorative and
+   connecting meant dragging past it into the middle of the box.
+   `transform: none` matters — `.node-port` carries `translateY(-50%)` for the
+   13px round ports, and inheriting it here shifted the whole hit area 8px above
+   the box it is supposed to cover. */
+.node-port.hub-port-add {
+  position: absolute;
+  inset: 0 0 0 -32px; /* mixer: reach left over the nub and the gap */
+  transform: none;
+  width: auto;
+  height: auto;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 6px;
+  z-index: 2;
+}
+.node--splitter .node-port.hub-port-add {
+  inset: 0 -32px 0 0; /* splitter: its nub sits on the right edge */
+}
+.hub-add-row:hover .hub-add-box {
+  border-color: var(--color-type-source);
+  color: var(--color-type-source);
+}
+.hub-add-row:hover .hub-add-nub {
+  border-color: var(--color-type-source);
+  color: var(--color-type-source);
+}
+.node--splitter .hub-add-row:hover .hub-add-box,
+.node--splitter .hub-add-row:hover .hub-add-nub {
+  border-color: var(--color-type-hub);
+  color: var(--color-type-hub);
+}
+
+/* ── Single fixed port (mixer output / splitter input), card-centred ── */
+.node-port.hub-port-out,
+.node-port.hub-port-in-single {
+  position: absolute;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--color-canvas);
+  transform: translateY(-50%);
+}
+.node-port.hub-port-out {
+  /* mixer mix-output — right edge, own accent */
+  right: -6.5px;
+  background: var(--color-type-hub);
+  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--color-type-hub) 60%, transparent);
+}
+.node-port.hub-port-in-single {
+  /* splitter input — left edge. Neutral until wired; feeding node's accent inline. */
+  left: -6.5px;
+  background: var(--color-edge-idle);
+}
+
+/* Unconnected OUT: a muted variant of the hub's own accent, no glow — the same
+   rule leaf nodes use for `.node-port--out.is-unconnected`. */
+.node-port.hub-port-out.is-unconnected,
+.node-port.hub-port-out-row.is-unconnected {
+  background: color-mix(in srgb, var(--color-type-hub) 40%, var(--color-edge-idle));
+  box-shadow: none;
+}
+
+.node--splitter {
+  --type-color: var(--color-type-hub);
 }

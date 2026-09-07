@@ -15,13 +15,6 @@ import { EditableName } from '@/shared/ui/EditableName';
  * The card border reacts to the cursor (soft type-color glow tracking the
  * pointer), throttled to one rAF and only while THIS card is hovered.
  */
-function meterLabel(node: NodeModel): string {
-  if (node.kind === 'source') return 'input level';
-  if (node.kind === 'output' || (node.kind === 'virtual' && !node.micSink)) return 'output level';
-  if (node.kind === 'virtual' && node.micSink) return 'input level';
-  return 'level';
-}
-
 export function NodeCard({
   node,
   search,
@@ -37,6 +30,8 @@ export function NodeCard({
   onDuplicate,
   onDelete,
   onRename,
+  outConnected,
+  inSourceColorVar,
 }: {
   node: NodeModel;
   search?: 'match' | 'dim';
@@ -44,6 +39,10 @@ export function NodeCard({
   actions?: boolean;
   /** Live connection status shown persistently on the node (t19). */
   status?: LinkStatus;
+  /** OUT port: has ≥1 outgoing edge → full own accent, else muted (t28 ports). */
+  outConnected?: boolean;
+  /** IN port: CSS var of the SOURCE node's accent when connected, else neutral. */
+  inSourceColorVar?: string;
   /** Solo-chain highlight: 'on' = in the audible chain, 'off' = dimmed by solo. */
   chainState?: 'on' | 'off';
   /** FX node below the solo listening point → its effect is bypassed while solo. */
@@ -126,10 +125,28 @@ export function NodeCard({
         )}
 
         {node.hasInput !== false && (
-          <span className="node-port node-port--in" data-node={node.id} data-side="in" data-port="" />
+          <span
+            className="node-port node-port--in"
+            data-node={node.id}
+            data-side="in"
+            data-port=""
+            style={
+              inSourceColorVar
+                ? {
+                    background: `var(${inSourceColorVar})`,
+                    boxShadow: `0 0 9px -1px color-mix(in srgb, var(${inSourceColorVar}) 60%, transparent)`,
+                  }
+                : undefined
+            }
+          />
         )}
         {node.hasOutput !== false && (
-          <span className="node-port node-port--out" data-node={node.id} data-side="out" data-port="" />
+          <span
+            className={`node-port node-port--out${outConnected ? '' : ' is-unconnected'}`}
+            data-node={node.id}
+            data-side="out"
+            data-port=""
+          />
         )}
 
         <div className="node-head">
@@ -144,27 +161,29 @@ export function NodeCard({
           </div>
         </div>
 
-        <div className="node-meter-block">
-          <div className="node-meter-label">{meterLabel(node)}</div>
+        <div className="node-panel">
           <div className="node-meter" aria-hidden>
-            <div className="node-meter-fill" style={{ width: `${node.level * 100}%` }} />
+            <div
+              className="node-meter-fill"
+              style={{ ['--lvl' as string]: `${node.level * 100}%` }}
+            />
           </div>
-        </div>
 
-        <div className="node-vol">
-          <button
-            className="node-mute"
-            title={node.muted ? 'unmute' : 'mute'}
-            aria-label="mute"
-            onClick={() => onMute?.(node.id)}
-          >
-            {node.muted ? <IconMuted /> : <IconSpeaker />}
-          </button>
-          <VolumeSlider
-            value={node.volume}
-            onChange={(v) => onVolume?.(node.id, v)}
-            ariaLabel="volume"
-          />
+          <div className="node-vol">
+            <button
+              className="node-mute"
+              title={node.muted ? 'unmute' : 'mute'}
+              aria-label="mute"
+              onClick={() => onMute?.(node.id)}
+            >
+              {node.muted ? <IconMuted /> : <IconSpeaker />}
+            </button>
+            <VolumeSlider
+              value={node.volume}
+              onChange={(v) => onVolume?.(node.id, v)}
+              ariaLabel="volume"
+            />
+          </div>
         </div>
       </div>
     </div>

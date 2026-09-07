@@ -91,16 +91,16 @@
   transition: opacity var(--transition-fast), filter var(--transition-fast);
 }
 .node.is-solo-on .node-card {
-  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-node-border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent),
+  box-shadow: var(--rim),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 55%, transparent),
     var(--shadow-node);
 }
 /* FX below the listening point: routed through, but its effect is bypassed by solo.
-   Still on-chain, so shown — but a dashed, muted border says "not applied now". */
+   Still on-chain, so shown — but a dashed, muted ring says "not applied now". */
 .node.is-solo-skipped .node-card {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--color-text-secondary) 45%, var(--color-node-border));
   box-shadow: var(--shadow-node);
+  outline: 1px dashed color-mix(in srgb, var(--color-text-secondary) 45%, var(--color-node-rim));
+  outline-offset: -1px;
 }
 .node-skip-tag {
   margin-left: 6px;
@@ -165,16 +165,57 @@
   background: rgba(127, 46, 46, 0.16);
 }
 
-/* ── Card: solid fill, no gradient ────────────────────────────── */
+/* ── Card: New Primary — flat gradient + 1px inset rim (t28) ───── */
 .node-card {
   position: relative;
   border-radius: 11px;
+  background: var(--gradient-node-primary);
+  border: none;
+  /* The card's rim lives in a variable so the state rules further down can
+     re-compose `box-shadow` without knowing which style is active. Hard-coding
+     --shadow-node-rim there made every state (is-active is on nearly every node)
+     silently reinstate the Primary rim over Glass/Legacy. (t28) */
+  --rim: var(--shadow-node-rim);
+  box-shadow: var(--rim), var(--shadow-node);
+  height: 123px;
+  padding: 0;
+  transition: box-shadow var(--transition-fast), opacity var(--transition-fast);
+}
+
+/* ── Style variants (Settings → node_style; t28) ──────────────────
+   Base .node-card above = New Primary (the default). These override the
+   card SURFACE only; layout, label, ports and VU stay identical. */
+
+/* Glass (book model) — an OPAQUE tinted-dark base (#0e0e11, slightly lighter than
+   the recessed panels so they stay distinct), a category-accent bloom at the top,
+   a white hairline border + top highlight. No translucency/backdrop-filter: the
+   card must not blend into its own substrate panel. */
+:root[data-node-style='glass'] .node-card {
+  --rim: inset 0 0 0 1px rgba(255, 255, 255, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.13);
+  background: #0e0e11;
+  box-shadow: var(--rim), var(--shadow-node);
+}
+:root[data-node-style='glass'] .node-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    ellipse at 72% 2%,
+    color-mix(in srgb, var(--type-color) 30%, transparent),
+    color-mix(in srgb, var(--type-color) 14%, transparent) 45%,
+    transparent 72%
+  );
+  pointer-events: none;
+}
+
+/* Legacy — the pre-redesign solid surface (kept as a selectable style). */
+:root[data-node-style='legacy'] .node-card {
+  --rim: inset 0 0 0 1px var(--color-node-border);
   background: var(--color-node-bg);
-  border: 1px solid var(--color-node-border);
-  box-shadow: var(--shadow-node);
-  padding: 12px;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
-    opacity var(--transition-fast);
+  box-shadow: var(--rim), var(--shadow-node);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Cursor-reactive border: a 1px gradient ring whose bright spot follows the
@@ -201,21 +242,27 @@
   opacity: 0.9;
 }
 
-/* ── Head: icon + titles ──────────────────────────────────────── */
+/* ── Head (Label block): icon + titles, pinned at 13/16 (t28) ────
+   Typographic alignment (NOT bbox-centre): icon anchored to the top; the Name's
+   cap-height sits at the icon-top, the SubName's baseline at the icon-bottom. */
 .node-head {
+  position: absolute;
+  left: 13px;
+  right: 13px; /* give the flex a width so .node-titles (absolute children) can grow */
+  top: 16px;
   display: flex;
-  align-items: center;
-  gap: 9px;
+  align-items: flex-start;
+  gap: 7px;
 }
 .node-icon {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
   background: var(--color-icon-bg);
-  border: 1px solid var(--color-icon-border);
+  border: none;
   color: var(--color-icon-letter);
 }
 .node-icon-letter {
@@ -231,16 +278,24 @@
   object-fit: contain;
 }
 .node-titles {
+  position: relative;
+  height: 25px; /* = icon height; Name/Sub are placed by typography inside it */
   flex: 1 1 auto;
   min-width: 0;
 }
 .node-name {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  line-height: 12px; /* tight → cap-height sits at the icon-top */
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.15px;
   color: var(--color-text-primary);
   white-space: nowrap;
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   text-overflow: ellipsis;
 }
 /* Inline rename input — keeps the .node-name font, strips input chrome. */
@@ -259,46 +314,57 @@
   color: var(--color-text-primary);
 }
 .node-sub {
+  position: absolute;
+  top: 17px;
+  left: 0;
+  right: 0;
+  line-height: 8px; /* baseline sits at the icon-bottom */
   font-size: 10px;
   color: var(--color-text-secondary);
   white-space: nowrap;
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   text-overflow: ellipsis;
-  margin-top: 1px;
 }
 
-/* ── Meter block: a recessed panel holding the label + bar ────── */
-.node-meter-block {
-  margin: 10px 0 9px;
-  padding: 7px 8px 8px;
-  background: var(--color-node-inset);
-  border: 1px solid var(--color-node-inset-border);
-  border-radius: 7px;
-}
-.node-meter-label {
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  margin: 0 0 5px 1px;
+/* ── Substrate panel: recessed island holding the VU-meter + fader (t28).
+   Absolute at 7/59, 182×57 (rim 7 from card edges). Book Source layout. ── */
+.node-panel {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  top: 59px;
+  height: 57px;
+  background: #0c0c0e;
+  border: 1px solid #17171a;
+  border-radius: 9px;
+  padding: 11px 11px 0;
 }
 .node-meter {
+  position: relative;
   height: 4px;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--color-vu-track);
   overflow: hidden;
 }
+/* Classic dBFS zones along the bar's length (t28), engine floor −100 dBFS:
+   🟢 −100..−15 (0–85%) · 🟡 −15..−5 (85–95%) · 🔴 −5..0 (95–100%).
+   The gradient paints the full track; clip-path reveals the lit part (--lvl). */
 .node-meter-fill {
-  height: 100%;
+  position: absolute;
+  inset: 0;
   border-radius: 2px;
-  background: var(--type-color);
-  box-shadow: 0 0 5px -1px color-mix(in srgb, var(--type-color) 65%, transparent);
-  transition: width 90ms linear;
+  background: linear-gradient(90deg, #4ADE80 0 83%, #E8C13E 87% 93%, #F2555A 97%);
+  clip-path: inset(0 calc(100% - var(--lvl, 0%)) 0 0);
+  transition: clip-path 90ms linear;
 }
 
 /* ── Bottom row: round mute + slider + percent ────────────────── */
 .node-vol {
+  margin-top: 10px;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
 }
 .node-mute {
   flex: 0 0 auto;
@@ -306,8 +372,8 @@
   height: 23px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--color-icon-border);
-  background: var(--color-icon-bg);
+  border: 1px solid #2d2d31;
+  background: #1b1b1f;
   color: var(--color-text-secondary);
   border-radius: 50%;
   cursor: pointer;
@@ -327,10 +393,27 @@
   flex: 1 1 auto;
   -webkit-appearance: none;
   appearance: none;
+  /* Box height = thumb height (12px), so the thumb's vertical centre lands on the
+     box centre in EVERY engine regardless of how each UA positions the thumb.
+     The 3px fill stays on the INPUT background (reliable) as a centred stripe →
+     track + thumb share one axis. (t28 row-alignment fix.) */
+  height: 12px;
+  background: linear-gradient(
+      90deg,
+      var(--type-color) 0 calc(var(--p, 0) * 1%),
+      var(--color-vu-track) calc(var(--p, 0) * 1%) 100%
+    )
+    center / 100% 3px no-repeat;
+  cursor: pointer;
+}
+.node-slider::-moz-range-track {
   height: 3px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.14);
-  cursor: pointer;
+  background: linear-gradient(
+    90deg,
+    var(--type-color) 0 calc(var(--p, 0) * 1%),
+    var(--color-vu-track) calc(var(--p, 0) * 1%) 100%
+  );
 }
 .node-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -398,29 +481,38 @@
 }
 
 /* ── Ports ────────────────────────────────────────────────────── */
+/* Ports (t28): 13×13. OUT = the node's own accent (a route source);
+   IN = neutral until wired to a source (source-accent colouring is dynamic, later). */
 .node-port {
   position: absolute;
   top: 50%;
-  width: 9px;
-  height: 9px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: var(--type-color);
   border: 2px solid var(--color-canvas);
   transform: translateY(-50%);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--type-color) 60%, transparent);
 }
 .node-port--in {
-  left: -5px;
+  left: -6.5px;
+  background: var(--color-edge-idle);
 }
 .node-port--out {
-  right: -5px;
+  right: -6.5px;
+  background: var(--type-color);
+  box-shadow: 0 0 9px -1px color-mix(in srgb, var(--type-color) 65%, transparent);
+}
+/* Unconnected OUT: a muted variant of the node's own accent, no glow. */
+.node-port--out.is-unconnected {
+  background: color-mix(in srgb, var(--type-color) 40%, var(--color-edge-idle));
+  box-shadow: none;
 }
 
 /* ── States ───────────────────────────────────────────────────── */
 /* Active = a soft type-color glow near the card (subtle, like the reference);
    the border stays neutral. */
 .node.is-active .node-card {
-  box-shadow: var(--shadow-node), 0 0 20px -6px color-mix(in srgb, var(--type-color) 45%, transparent);
+  box-shadow: var(--rim), var(--shadow-node),
+    0 0 20px -6px color-mix(in srgb, var(--type-color) 45%, transparent);
 }
 .node.is-muted .node-card {
   opacity: 0.6;
@@ -440,14 +532,12 @@
 
 /* Selected → accent outline. */
 .node.is-selected .node-card {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent);
+  box-shadow: var(--rim), var(--shadow-node), 0 0 0 1px var(--color-accent);
 }
 
 /* Search → matching nodes get an accent ring, the rest dim. */
 .node.is-search-match .node-card {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-node), 0 0 0 1px var(--color-accent),
+  box-shadow: var(--rim), var(--shadow-node), 0 0 0 1px var(--color-accent),
     0 0 22px -6px color-mix(in srgb, var(--color-accent) 45%, transparent);
 }
 .node.is-search-dim {
@@ -455,20 +545,16 @@
   transition: opacity var(--transition-fast);
 }
 
-/* Compact → icon + name + meter only, no slider (same width as full nodes). */
+/* Compact → icon + name + meter only, no fader (shorter card). */
 .node.is-compact {
   width: 196px;
 }
 .node.is-compact .node-card {
-  padding: 9px 10px;
+  height: 92px;
 }
-.node.is-compact .node-meter-block {
-  margin: 9px 0 0;
-  padding: 0;
-  background: transparent;
-  border: none;
+.node.is-compact .node-panel {
+  height: 26px;
 }
-.node.is-compact .node-meter-label,
 .node.is-compact .node-vol {
   display: none;
 }
