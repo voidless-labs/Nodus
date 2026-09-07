@@ -89,7 +89,17 @@ export interface FxLevel {
   input_level: number;
   /** Engine's own state: gate open (passing), or dynamics actively reducing. */
   active: boolean;
+  /**
+   * EQ only: the input spectrum drawn behind the curve — one quantised level per
+   * band, 0..255, low frequencies first. Measured PRE-EQ, so the backdrop shows
+   * what arrived and the curve on top shows what the node does to it. Absent for
+   * every other kind, and while the engine is stopped.
+   */
+  spectrum?: number[];
 }
+
+/** Bands the engine publishes in {@link FxLevel.spectrum} (`SPECTRUM_BANDS`). */
+export const EQ_SPECTRUM_BANDS = 32;
 
 /**
  * Live FX telemetry keyed by node id. Its own event rather than keys in

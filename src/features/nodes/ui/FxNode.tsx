@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import './FxNode.css';
 import { KIND_COLOR_VAR, kindLabel, type LinkStatus, type NodeModel } from '@/features/nodes/types';
-import type { FxSpec } from '@/shared/bridge';
+import { EQ_SPECTRUM_BANDS, type FxSpec } from '@/shared/bridge';
 import { NodeIcon } from '@/features/nodes/ui/NodeIcon';
 import { NodeToolbar } from '@/features/nodes/ui/NodeToolbar';
 import { EditableName } from '@/shared/ui/EditableName';
@@ -321,23 +321,28 @@ const EQ_AMPL = 48; // px at ±EQ_MAX_DB
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const eqGainToY = (g: number) => EQ_CENTER_Y - (clamp(g, -EQ_MAX_DB, EQ_MAX_DB) / EQ_MAX_DB) * EQ_AMPL;
 
-/** Static spectrum silhouette behind the curve (deterministic; live spectrum later). */
-const EQ_SPECTRUM = (() => {
+// Spectrum backdrop: one bar per engine band, spanning the same width the book's
+// silhouette did. Bar count follows EQ_SPECTRUM_BANDS so the two can never drift.
+const EQ_BAR_W = 4.1;
+const EQ_BAR_X0 = 4;
+const EQ_BAR_PITCH = (EQ_CW - 2 - EQ_BAR_X0 - EQ_BAR_W) / (EQ_SPECTRUM_BANDS - 1);
+
+/**
+ * Silhouette drawn when there is no telemetry — engine stopped, or this node not in
+ * a live chain. A fallback only: with the engine running the bars are real measured
+ * levels, never a shape invented here.
+ */
+const EQ_IDLE_SHAPE: number[] = (() => {
   let seed = 7;
   const rnd = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-  const bars: { x: number; y: number; w: number; h: number }[] = [];
-  const BW = 4.1;
-  const PITCH = 6.45;
-  for (let x = 4; x + BW <= EQ_CW - 2; x += PITCH) {
-    const t = x / EQ_CW;
+  return Array.from({ length: EQ_SPECTRUM_BANDS }, (_, i) => {
+    const t = (EQ_BAR_X0 + i * EQ_BAR_PITCH) / EQ_CW;
     const env = 0.35 + 0.55 * Math.exp(-(((t - 0.26) / 0.2) ** 2)) + 0.28 * Math.exp(-(((t - 0.62) / 0.3) ** 2));
-    const h = Math.max(0.12, Math.min(0.9, 0.22 + 0.72 * env * (0.6 + 0.4 * rnd()))) * EQ_CH;
-    bars.push({ x: r1(x), y: r1(EQ_CH - h), w: BW, h: r1(h) });
-  }
-  return bars;
+    return Math.max(0.12, Math.min(0.9, 0.22 + 0.72 * env * (0.6 + 0.4 * rnd())));
+  });
 })();
 
 /** Smooth Catmull-Rom path through the band points (flat shelves at the edges). */
@@ -363,10 +368,12 @@ function EqBody({
   node,
   fx,
   onChange,
+  spectrum,
 }: {
   node: NodeModel;
   fx: FxSpec;
   onChange?: (id: string, fx: FxSpec) => void;
+  spectrum?: number[];
 }) {
   const graphRef = useRef<HTMLDivElement>(null);
   const bands = fx.eq_bands && fx.eq_bands.length === 5 ? fx.eq_bands : [0, 0, 0, 0, 0];
@@ -378,6 +385,12 @@ function EqBody({
   ];
   const curve = eqCurvePath(pts);
   const fill = `${curve} L ${EQ_CW},${EQ_CH} L 0,${EQ_CH} Z`;
+  // Measured levels when the engine is feeding this node; the idle silhouette only
+  // when there is nothing to measure. The face displays, it does not invent.
+  const bars =
+    spectrum && spectrum.length === EQ_SPECTRUM_BANDS
+      ? spectrum.map((v) => v / 255)
+      : EQ_IDLE_SHAPE;
 
   const onDotDown = (i: number) => (e: React.MouseEvent) => {
     if (!onChange) return;
@@ -408,9 +421,20 @@ function EqBody({
       </div>
       <div className="eq-graph" ref={graphRef}>
         <svg viewBox={`0 0 ${EQ_CW} ${EQ_CH}`} width="100%" height="100%" preserveAspectRatio="none" fill="none">
-          {EQ_SPECTRUM.map((b, i) => (
-            <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="1" fill="#24242a" />
-          ))}
+          {bars.map((h, i) => {
+            const bh = Math.max(1, h * EQ_CH);
+            return (
+              <rect
+                key={i}
+                x={r1(EQ_BAR_X0 + i * EQ_BAR_PITCH)}
+                y={r1(EQ_CH - bh)}
+                width={EQ_BAR_W}
+                height={r1(bh)}
+                rx="1"
+                fill="#24242a"
+              />
+            );
+          })}
           <path d={fill} fill="#FB923C" opacity="0.12" />
           <path
             d={curve}
@@ -594,6 +618,7 @@ export function FxNode({
   reductionDb = 0,
   inputLevel,
   active,
+  spectrum,
 }: {
   node: NodeModel;
   search?: 'match' | 'dim';
@@ -613,6 +638,8 @@ export function FxNode({
   onAdvanced?: (id: string) => void;
   outConnected?: boolean;
   inSourceColorVar?: string;
+  /** EQ only: measured input spectrum, one 0..255 level per band (low → high). */
+  spectrum?: number[];
   /** Live gain reduction this FX is applying, in dB (0 = idle) — drives the GR meter. */
   reductionDb?: number;
   /** Live level arriving at this FX (0..1). Undefined when the engine is stopped. */
@@ -793,7 +820,9 @@ export function FxNode({
             active={active}
           />
         )}
-        {fx?.kind === 'eq' && <EqBody node={node} fx={fx} onChange={onFxParams} />}
+        {fx?.kind === 'eq' && (
+          <EqBody node={node} fx={fx} onChange={onFxParams} spectrum={spectrum} />
+        )}
         {fx?.kind === 'limiter' && (
           <LimiterBody
             node={node}

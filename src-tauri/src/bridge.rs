@@ -545,6 +545,14 @@ pub fn setup_background_tasks(
                     Some(p) => {
                         (p.reduction_db - v.reduction_db).abs() > 0.1
                             || (p.input_level - v.input_level).abs() > 0.01
+                            // The EQ backdrop: one step out of 255 is far below what
+                            // a 115px-tall bar can show, so only a visible move earns
+                            // a repaint.
+                            || p.spectrum.len() != v.spectrum.len()
+                            || p.spectrum
+                                .iter()
+                                .zip(v.spectrum.iter())
+                                .any(|(a, b)| a.abs_diff(*b) > 3)
                     }
                 });
             if fx_changed {

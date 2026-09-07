@@ -385,6 +385,24 @@ impl Biquad {
     /// Adopt another filter's coefficients while KEEPING this one's history.
     /// Retuning a running filter must not clear x/y state: rebuilding it instead
     /// drops the tail mid-signal, which clicks on every drag of an EQ band.
+    /// Constant-peak-gain bandpass (RBJ cookbook): unity at `f0`, falling away on
+    /// both sides. Analysis only — this one never sits in the signal path, it just
+    /// measures how much energy lives in its band.
+    pub fn bandpass(fs: f32, f0: f32, q: f32) -> Self {
+        let w0 = 2.0 * std::f32::consts::PI * (f0 / fs);
+        let (sin, cos) = (w0.sin(), w0.cos());
+        let alpha = sin / (2.0 * q.max(1e-4));
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: alpha / a0,
+            b1: 0.0,
+            b2: -alpha / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha) / a0,
+            ..Default::default()
+        }
+    }
+
     pub fn set_coeffs(&mut self, other: &Biquad) {
         self.b0 = other.b0;
         self.b1 = other.b1;
@@ -410,6 +428,77 @@ impl Biquad {
         for s in samples.iter_mut() {
             *s = self.process_sample(*s);
         }
+    }
+}
+
+// ── Spectrum analyser behind the EQ curve (t18 wave 6b) ────────────────────
+
+/// Bands in the spectrum drawn behind the EQ curve. Enough to read as a silhouette
+/// at 220 px wide; more would be finer than the node can draw.
+pub const SPECTRUM_BANDS: usize = 32;
+const SPECTRUM_LO_HZ: f32 = 40.0;
+const SPECTRUM_HI_HZ: f32 = 16_000.0;
+/// Fast enough to show a transient, slow enough that the silhouette doesn't
+/// strobe at the meter's refresh rate.
+const SPECTRUM_ATTACK_S: f32 = 0.02;
+const SPECTRUM_RELEASE_S: f32 = 0.20;
+
+/// Log-spaced filter bank measuring the level in each band.
+///
+/// A filter bank rather than an FFT deliberately: the biquads already exist, it adds
+/// no dependency and no windowing/overlap machinery, and the frequency resolution an
+/// FFT would buy is precision this backdrop cannot display. If a real analyser is
+/// ever needed, the inside of this type can be swapped without touching the contract
+/// or the UI.
+pub struct SpectrumAnalyzer {
+    filters: Vec<Biquad>,
+    env: [f32; SPECTRUM_BANDS],
+    attack: f32,
+    release: f32,
+}
+
+impl SpectrumAnalyzer {
+    pub fn new(sample_rate: f32) -> Self {
+        let ratio = SPECTRUM_HI_HZ / SPECTRUM_LO_HZ;
+        let steps = (SPECTRUM_BANDS - 1) as f32;
+        // Q comes from the spacing itself: each band spans exactly one step of the
+        // log grid, so neighbours meet instead of overlapping into mush (too low) or
+        // leaving holes the signal falls through (too high).
+        let k = 2f32.powf(ratio.log2() / steps / 2.0);
+        let q = 1.0 / (k - 1.0 / k);
+        let nyquist_guard = sample_rate * 0.45;
+        let filters = (0..SPECTRUM_BANDS)
+            .map(|i| {
+                let f0 = SPECTRUM_LO_HZ * ratio.powf(i as f32 / steps);
+                Biquad::bandpass(sample_rate, f0.min(nyquist_guard), q)
+            })
+            .collect();
+        Self {
+            filters,
+            env: [0.0; SPECTRUM_BANDS],
+            attack: smoothing_coeff(sample_rate, SPECTRUM_ATTACK_S),
+            release: smoothing_coeff(sample_rate, SPECTRUM_RELEASE_S),
+        }
+    }
+
+    /// Measure one interleaved buffer. Runs on the channel average: the face draws a
+    /// single silhouette, so running the whole bank per channel would cost double for
+    /// a picture nobody could tell apart.
+    pub fn process(&mut self, frame: &[f32], channels: usize) {
+        let ch = channels.max(1);
+        for block in frame.chunks(ch) {
+            let mono = block.iter().sum::<f32>() / ch as f32;
+            for (b, filter) in self.filters.iter_mut().enumerate() {
+                let mag = filter.process_sample(mono).abs();
+                let coeff = if mag > self.env[b] { self.attack } else { self.release };
+                self.env[b] += (mag - self.env[b]) * coeff;
+            }
+        }
+    }
+
+    /// Per-band levels, dBFS-scaled to 0..1 exactly like every other meter here.
+    pub fn levels(&self) -> [f32; SPECTRUM_BANDS] {
+        std::array::from_fn(|i| dbfs_scaled(self.env[i]))
     }
 }
 
@@ -455,6 +544,11 @@ pub struct FxParams {
     input_level: AtomicU32,
     /// OUTBOUND: is the effect engaged right now (gate open / dynamics reducing)?
     active: AtomicBool,
+    /// OUTBOUND: the per-band level ARRIVING at this FX, dBFS-scaled 0..1 — the
+    /// backdrop behind the EQ curve. Measured pre-EQ on purpose: the curve already
+    /// draws what the node is doing, so showing the input lets you read cause and
+    /// effect in one glance. Only ever written by an EQ.
+    spectrum: [AtomicU32; SPECTRUM_BANDS],
 }
 
 /// One FX node's live telemetry, as published to the UI.
@@ -463,7 +557,7 @@ pub struct FxParams {
 /// about its own state must come from here, never from a parallel calculation on
 /// the UI side — that is precisely how the gate ended up drawing "closed" while
 /// the engine had it open.
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FxLevel {
     /// Gain reduction applied right now, in dB (0 = idle).
     pub reduction_db: f32,
@@ -473,6 +567,12 @@ pub struct FxLevel {
     /// Is the effect engaged right now? Gate: open (passing). Limiter/Compressor:
     /// actively reducing gain.
     pub active: bool,
+    /// Input spectrum for the EQ backdrop: one quantised level per band, 0..255.
+    /// Empty for every other kind, so nothing else pays for it. Quantised to u8
+    /// because 32 floats per node at meter refresh rate is a lot of JSON for a
+    /// silhouette that is never read numerically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spectrum: Vec<u8>,
 }
 
 impl FxParams {
@@ -493,6 +593,7 @@ impl FxParams {
             gain_reduction_db: AtomicU32::new(0f32.to_bits()),
             input_level: AtomicU32::new(0f32.to_bits()),
             active: AtomicBool::new(false),
+            spectrum: std::array::from_fn(|_| AtomicU32::new(0f32.to_bits())),
         };
         p
     }
@@ -503,6 +604,22 @@ impl FxParams {
             reduction_db: Self::load_f32(&self.gain_reduction_db),
             input_level: Self::load_f32(&self.input_level),
             active: self.active.load(Ordering::Relaxed),
+            // Only an EQ has a backdrop to draw; everything else ships an empty vec
+            // rather than 32 zeroes nobody will render.
+            spectrum: if matches!(self.kind, FxKind::Eq) {
+                self.spectrum
+                    .iter()
+                    .map(|a| (Self::load_f32(a) * 255.0).clamp(0.0, 255.0) as u8)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    fn set_spectrum(&self, bands: &[f32; SPECTRUM_BANDS]) {
+        for (slot, v) in self.spectrum.iter().zip(bands.iter()) {
+            slot.store(v.to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -560,6 +677,9 @@ pub struct FxProcessor {
     eq: Vec<Biquad>,
     /// Channel count the `eq` layout was built for.
     eq_channels: usize,
+    /// Present only on an EQ — the other kinds have no backdrop to feed, and the
+    /// bank is ~1.5 KB of filter state that would otherwise sit in every processor.
+    spectrum: Option<Box<SpectrumAnalyzer>>,
     limiter: Limiter,
     compressor: Compressor,
     /// Reporting peak-follower state (linear). Kept per processor rather than read
@@ -578,6 +698,7 @@ impl FxProcessor {
             gate: NoiseGate::new(sample_rate, -45.0, -55.0),
             eq: Vec::new(),
             eq_channels: 0,
+            spectrum: None,
             limiter: Limiter::new(sample_rate, 0.0, 0.0),
             compressor: Compressor::new(sample_rate, 0.0, 1.0),
             in_level: 0.0,
@@ -605,6 +726,12 @@ impl FxProcessor {
                 if self.eq_channels != ch {
                     self.eq = vec![Biquad::default(); EQ_BAND_FREQS.len() * ch];
                     self.eq_channels = ch;
+                }
+                // Built once, on the first EQ buffer — never rebuilt on a parameter
+                // change, or a drag would keep resetting the envelopes and the
+                // backdrop would flicker in time with the user's mouse.
+                if self.spectrum.is_none() {
+                    self.spectrum = Some(Box::new(SpectrumAnalyzer::new(self.sample_rate)));
                 }
                 let nyquist_guard = self.sample_rate * 0.45;
                 for (b, &f0) in EQ_BAND_FREQS.iter().enumerate() {
@@ -671,6 +798,12 @@ impl FxProcessor {
                 let ch = channels.max(1);
                 if self.eq_channels != ch {
                     self.reload(channels); // channel count changed (format change)
+                }
+                // Measure BEFORE the bands run: the backdrop shows what arrived, the
+                // curve on top shows what this node does to it.
+                if let Some(an) = self.spectrum.as_mut() {
+                    an.process(frame, ch);
+                    self.params.set_spectrum(&an.levels());
                 }
                 // One pass over the buffer, each sample through all five bands —
                 // cheaper on cache than five passes over the whole frame.
@@ -753,6 +886,41 @@ mod tests {
             ceiling_db: 0.0,
             ratio: 0.0,
         }
+    }
+
+    /// Feed a pure tone and check the bank puts its energy where the tone actually
+    /// is. A spectrum that merely *moves* looks convincing while being wrong, so the
+    /// band index is asserted, not just "something lit up".
+    #[test]
+    fn spectrum_lands_a_tone_in_the_band_that_contains_it() {
+        let sr = 48_000.0;
+        let mut an = SpectrumAnalyzer::new(sr);
+        let tone: Vec<f32> = (0..sr as usize / 2)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).sin() * 0.5)
+            .collect();
+        an.process(&tone, 1);
+        let levels = an.levels();
+
+        // Band centres are 40 Hz * 400^(i/31); 1 kHz sits at i = 31*ln(25)/ln(400).
+        let expected = (31.0 * 25f32.ln() / 400f32.ln()).round() as usize;
+        let peak = (0..SPECTRUM_BANDS)
+            .max_by(|&a, &b| levels[a].total_cmp(&levels[b]))
+            .expect("bands exist");
+        assert!(
+            peak.abs_diff(expected) <= 1,
+            "1 kHz landed in band {peak}, expected ~{expected}: {levels:?}"
+        );
+        // And the far ends stay quiet — a bank that leaks everywhere would still
+        // pass the peak check above.
+        assert!(levels[0] < levels[peak] * 0.6, "40 Hz band should be near-silent");
+        assert!(levels[SPECTRUM_BANDS - 1] < levels[peak] * 0.6, "16 kHz band too");
+    }
+
+    #[test]
+    fn spectrum_reads_silence_as_silence() {
+        let mut an = SpectrumAnalyzer::new(48_000.0);
+        an.process(&vec![0.0f32; 4800], 2);
+        assert!(an.levels().iter().all(|&v| v == 0.0));
     }
 
     #[test]

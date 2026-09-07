@@ -113,7 +113,10 @@ export function Graph({
   /** Live per-source levels from the engine (keyed by device id / exe name). */
   levels?: Record<string, number>;
   /** Live FX telemetry per node id: decision level, gain reduction, engine state. */
-  fxLevels?: Record<string, { reduction_db: number; input_level: number; active: boolean }>;
+  fxLevels?: Record<
+    string,
+    { reduction_db: number; input_level: number; active: boolean; spectrum?: number[] }
+  >;
   /** Live per-output-device link health, keyed by device id (LINK_* code). */
   links?: Record<string, number>;
   /** Ids of devices currently present (enumerated) — for the node status dot. */
@@ -631,6 +634,7 @@ export function Graph({
                 reductionDb={fxLevels[n.id]?.reduction_db ?? 0}
                 inputLevel={fxLevels[n.id]?.input_level}
                 active={fxLevels[n.id]?.active}
+                spectrum={fxLevels[n.id]?.spectrum}
               />
             );
           }
