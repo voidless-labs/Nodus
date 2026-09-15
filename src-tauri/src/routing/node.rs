@@ -31,7 +31,9 @@ pub enum FxKind {
 /// FX parameters, flat + named so UI and engine share one shape. Fields are used
 /// per `kind` (unused ones stay at default): gain_db (gain/eq), open_db/close_db
 /// (gate), freq/q (eq). `bypassed` = pass through untouched (manual, or solo-skip).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// `PartialEq` so an execution plan built from the graph can be asserted against
+/// in tests (t33). Plain field equality — these are settings, not measurements.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FxSpec {
     pub kind: FxKind,
     #[serde(default)]

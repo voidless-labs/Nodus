@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::bus::{passthrough_spec, BusInput, BusOp, BusPlan, BusSink, PlanBuilder};
 use super::node::{FxSpec, Node, NodeId, NodeType, Route, RouteId};
 
 #[derive(Debug, Error)]
@@ -322,6 +323,134 @@ pub struct ActiveRoute {
 }
 
 impl Graph {
+    /// Resolve the graph into an execution plan where every node exists ONCE (t33).
+    ///
+    /// The traversal runs backwards from each output and memoises by node id, so a
+    /// node feeding two outputs is built once and shared. That is the whole
+    /// difference from `resolve_device_routes`, which walks forwards from sources
+    /// and therefore rebuilds the shared part of the path per output.
+    pub fn resolve_bus_plan(&self) -> BusPlan {
+        let mut b = PlanBuilder::new();
+        // Outputs in a stable order so the plan is deterministic (tests, and a
+        // reproducible engine are worth more than the map's iteration order).
+        let mut outputs: Vec<&Node> = self
+            .nodes
+            .values()
+            .filter(|n| matches!(n.node_type, NodeType::Output | NodeType::Virtual))
+            .filter(|n| !n.device_id.is_empty())
+            .collect();
+        outputs.sort_by(|a, b| a.id.cmp(&b.id));
+
+        for out in outputs {
+            let mut incoming = self.routes_to(&out.id);
+            incoming.sort_by(|a, b| a.id.cmp(&b.id));
+            for route in incoming {
+                // A Virtual node with incoming edges is an output (the virtual mic);
+                // one without is a source. `routes_to` being non-empty settles it.
+                let Some(from) = self.build_bus_node(&route.from_node, &mut b) else {
+                    continue;
+                };
+                let mut chain = Vec::new();
+                self.collect_chain_edges(&route.from_node, &mut chain);
+                chain.push(route.id.clone());
+                b.sinks.push(BusSink {
+                    input: from,
+                    route_id: route.id.clone(),
+                    chain,
+                    to_device_id: out.device_id.clone(),
+                    to_is_virtual_mic:
+                        crate::virtual_audio::virtual_device::is_nodus_virtual_mic_name(&out.label),
+                });
+            }
+        }
+        b.finish()
+    }
+
+    /// Every edge upstream of `node`, so a branch still honours intermediate faders.
+    /// Order is signal-ish but not guaranteed; only the SET matters (product / OR).
+    fn collect_chain_edges(&self, node: &NodeId, out: &mut Vec<RouteId>) {
+        for r in self.routes_to(node) {
+            if out.contains(&r.id) {
+                continue; // shared upstream reached from two branches
+            }
+            out.push(r.id.clone());
+            self.collect_chain_edges(&r.from_node, out);
+        }
+    }
+
+    /// Build (or reuse) the plan node for a graph node. `None` when the node cannot
+    /// produce audio — an unconfigured source, or an output used as an input.
+    fn build_bus_node(&self, id: &NodeId, b: &mut PlanBuilder) -> Option<usize> {
+        if let Some(&idx) = b.built.get(id) {
+            return Some(idx); // already built — THIS is what makes it exist once
+        }
+        if b.visiting.contains(id) {
+            return None; // cycle guard (apply_snapshot rejects these, but be safe)
+        }
+        let node = self.nodes.get(id)?;
+
+        match node.node_type {
+            NodeType::Source | NodeType::Virtual => {
+                if node.device_id.is_empty() && node.exe_name.is_none() {
+                    return None;
+                }
+                let key = match &node.exe_name {
+                    Some(exe) => format!("exe:{exe}"),
+                    None => node.device_id.clone(),
+                };
+                Some(b.push(
+                    id,
+                    BusOp::Source {
+                        key,
+                        device_id: node.device_id.clone(),
+                        exe_name: node.exe_name.clone(),
+                        is_virtual: crate::virtual_audio::virtual_device::is_nodus_virtual_name(
+                            &node.label,
+                        ),
+                    },
+                ))
+            }
+            NodeType::Fx | NodeType::Mixer | NodeType::Splitter => {
+                b.visiting.push(id.clone());
+                let mut incoming = self.routes_to(id);
+                incoming.sort_by(|a, b| a.id.cmp(&b.id));
+                let mut inputs = Vec::new();
+                for r in incoming {
+                    if let Some(from) = self.build_bus_node(&r.from_node, b) {
+                        inputs.push(BusInput { from, edge: r.id.clone() });
+                    }
+                }
+                b.visiting.pop();
+                if inputs.is_empty() {
+                    return None; // nothing feeds it — it produces nothing
+                }
+                let op = match node.node_type {
+                    // A 1→1 effect fed by several edges still must not drop audio the
+                    // user wired up: sum first, then process once.
+                    NodeType::Fx if inputs.len() > 1 => {
+                        let sum = b.push(&format!("{id}::sum"), BusOp::Sum { inputs });
+                        BusOp::Fx {
+                            node_id: id.clone(),
+                            spec: node.fx.unwrap_or_else(passthrough_spec),
+                            input: BusInput { from: sum, edge: String::new() },
+                        }
+                    }
+                    NodeType::Fx => BusOp::Fx {
+                        node_id: id.clone(),
+                        spec: node.fx.unwrap_or_else(passthrough_spec),
+                        input: inputs.remove(0),
+                    },
+                    // A mixer sums; a splitter (or a single-input mixer) passes through
+                    // and fan-out happens by several consumers reading it.
+                    NodeType::Mixer if inputs.len() > 1 => BusOp::Sum { inputs },
+                    _ => BusOp::Pass { input: inputs.remove(0) },
+                };
+                Some(b.push(id, op))
+            }
+            NodeType::Output => None, // an output never feeds anything
+        }
+    }
+
     /// Resolve the graph into device-level active routes for the engine.
     /// Splitter/Mixer nodes are inlined — only Source→Output device pairs remain.
     pub fn resolve_device_routes(&self) -> Vec<ActiveRoute> {
@@ -660,6 +789,119 @@ mod tests {
                     assert!(!r.to_is_virtual_mic, "{} must not be flagged", r.to_device_id)
                 }
                 other => panic!("unexpected destination {other}"),
+            }
+        }
+    }
+
+    fn fx_node(kind: crate::routing::node::FxKind, label: &str) -> Node {
+        let mut n = Node::new(NodeType::Fx, label, "");
+        n.fx = Some(FxSpec {
+            kind,
+            bypassed: false,
+            gain_db: 0.0,
+            open_db: -45.0,
+            close_db: -55.0,
+            freq: 1000.0,
+            q: 1.0,
+            eq_bands: [0.0; 5],
+            threshold_db: 0.0,
+            ceiling_db: 0.0,
+            ratio: 0.0,
+        });
+        n
+    }
+
+    /// t33, the exact chain from the user's screenshot:
+    /// `Mic → Gate → EQ → Splitter →` (out A) and `→ Mixer →` (out B).
+    ///
+    /// Today's resolve builds the shared part ONCE PER OUTPUT — two gates, two
+    /// detectors, two states writing into one telemetry cell, which is why muting
+    /// one output made the gate's meter and badge flicker. The plan must contain
+    /// exactly one of each shared node.
+    #[test]
+    fn bus_plan_builds_a_shared_effect_once_not_once_per_output() {
+        use crate::routing::node::FxKind;
+        let mut g = Graph::new();
+        let mic = make_node(NodeType::Source, "mic-dev");
+        let gate = fx_node(FxKind::Gate, "Noise Gate");
+        let eq = fx_node(FxKind::Eq, "EQ");
+        let split = Node::new(NodeType::Splitter, "Splitter", "");
+        let mixer = Node::new(NodeType::Mixer, "Mixer", "");
+        let out_a = make_node(NodeType::Output, "headphones");
+        let out_b = make_node(NodeType::Output, "cable");
+        let (mid, gid, eid, sid, xid, aid, bid) = (
+            mic.id.clone(), gate.id.clone(), eq.id.clone(), split.id.clone(),
+            mixer.id.clone(), out_a.id.clone(), out_b.id.clone(),
+        );
+        for n in [mic, gate, eq, split, mixer, out_a, out_b] {
+            g.add_node(n);
+        }
+        g.add_route(Route::new(mid, gid.clone())).unwrap();
+        g.add_route(Route::new(gid.clone(), eid.clone())).unwrap();
+        g.add_route(Route::new(eid.clone(), sid.clone())).unwrap();
+        g.add_route(Route::new(sid.clone(), aid)).unwrap();
+        g.add_route(Route::new(sid.clone(), xid.clone())).unwrap();
+        g.add_route(Route::new(xid, bid)).unwrap();
+
+        let plan = g.resolve_bus_plan();
+        assert_eq!(plan.count_of(&gid), 1, "one gate, not one per output");
+        assert_eq!(plan.count_of(&eid), 1, "one EQ, not one per output");
+        assert_eq!(plan.sinks.len(), 2, "both outputs are still fed");
+        let split_idx = plan.index_of(&sid).expect("splitter is in the plan");
+        assert_eq!(plan.consumers_of(split_idx), 2, "splitter fans out to two branches");
+
+        // Contrast with the flat resolve this replaces: it produces the shared work
+        // twice, which is the defect — kept as an assertion so the difference is
+        // documented rather than asserted from memory.
+        let flat = g.resolve_device_routes();
+        assert_eq!(flat.len(), 2);
+        assert!(
+            flat.iter().all(|r| r.fx_chain.iter().any(|f| f.node_id == gid)),
+            "the flat resolve puts the SAME gate on both routes — two instances"
+        );
+    }
+
+    /// A limiter after a mixer must limit the SUM. The plan has to sum first and
+    /// process once, or the guarantee is arithmetically impossible.
+    #[test]
+    fn bus_plan_sums_mixer_inputs_before_the_effect() {
+        use crate::routing::node::FxKind;
+        let mut g = Graph::new();
+        let a = make_node(NodeType::Source, "dev-a");
+        let b = make_node(NodeType::Source, "dev-b");
+        let c = make_node(NodeType::Source, "dev-c");
+        let mixer = Node::new(NodeType::Mixer, "Mixer", "");
+        let lim = fx_node(FxKind::Limiter, "Limiter");
+        let out = make_node(NodeType::Output, "out-dev");
+        let (aid, bid, cid, mid, lid, oid) = (
+            a.id.clone(), b.id.clone(), c.id.clone(),
+            mixer.id.clone(), lim.id.clone(), out.id.clone(),
+        );
+        for n in [a, b, c, mixer, lim, out] {
+            g.add_node(n);
+        }
+        for s in [aid, bid, cid] {
+            g.add_route(Route::new(s, mid.clone())).unwrap();
+        }
+        g.add_route(Route::new(mid.clone(), lid.clone())).unwrap();
+        g.add_route(Route::new(lid.clone(), oid)).unwrap();
+
+        let plan = g.resolve_bus_plan();
+        assert_eq!(plan.count_of(&lid), 1, "one limiter on the bus");
+        let mixer_idx = plan.index_of(&mid).expect("mixer is in the plan");
+        match &plan.nodes[mixer_idx].op {
+            BusOp::Sum { inputs } => assert_eq!(inputs.len(), 3, "all three sources summed"),
+            other => panic!("mixer must be a summing point, got {other:?}"),
+        }
+        // Topological order is what lets the executor process each node once, in one
+        // pass, without re-entering an upstream node.
+        let lim_idx = plan.index_of(&lid).expect("limiter is in the plan");
+        assert!(lim_idx > mixer_idx, "the limiter runs after the sum");
+        for (i, n) in plan.nodes.iter().enumerate() {
+            match &n.op {
+                BusOp::Source { .. } => {}
+                BusOp::Fx { input, .. } | BusOp::Pass { input } => assert!(input.from < i),
+                BusOp::Sum { inputs } => assert!(inputs.iter().all(|x| x.from < i)),
             }
         }
     }
