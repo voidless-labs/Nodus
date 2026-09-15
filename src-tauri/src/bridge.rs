@@ -104,9 +104,10 @@ pub async fn get_running_audio_processes() -> Result<Vec<AudioProcess>, String> 
 
 // ── Diagnostics (t30) ──────────────────────────────────────────────────────
 
-/// Audio-path health: buffers lost to a lagging renderer and device-buffer
-/// underruns. The "crackling under load" bug is intermittent, so it is measured
-/// rather than eyeballed — see `.nodus/task/t30-audio-glitch-under-load.md`.
+/// Audio-path health: buffers lost to a lagging renderer, and dropouts — ms of
+/// silence the device played while audio was flowing (t35). The "crackling under
+/// load" bug is intermittent, so it is measured rather than eyeballed — see
+/// `.nodus/task/t30-audio-glitch-under-load.md`.
 #[tauri::command]
 pub async fn get_audio_health() -> Result<crate::audio::glitch::AudioHealth, String> {
     Ok(crate::audio::glitch::snapshot())
@@ -117,6 +118,13 @@ pub async fn get_audio_health() -> Result<crate::audio::glitch::AudioHealth, Str
 pub async fn reset_audio_health() -> Result<(), String> {
     crate::audio::glitch::reset();
     Ok(())
+}
+
+/// Open the folder with the log files in Explorer (t35), so nobody chasing a
+/// problem has to type `%APPDATA%` paths by hand.
+#[tauri::command]
+pub async fn open_log_folder() -> Result<(), String> {
+    crate::logging::open_folder()
 }
 
 // ── Routing commands ───────────────────────────────────────────────────────

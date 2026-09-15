@@ -12,45 +12,6 @@ use tauri::{
     WindowEvent,
 };
 use tracing::info;
-use tracing_subscriber::EnvFilter;
-
-/// Initialise logging: always to stdout (dev console), and — when a Windows
-/// `%APPDATA%` exists — additionally to a rolling daily file at
-/// `%APPDATA%\com.nodus.app\logs\nodus.log`. This is what makes engine
-/// diagnostics (WASAPI errors, VirtualRender lagged/overrun/format) visible when
-/// the app is launched from the installer, which has no console. Default level
-/// `info,nodus=debug` so our own debug lines are captured without third-party spam.
-/// The returned guard flushes the non-blocking file writer; keep it alive for the
-/// whole process (bound in `main`).
-fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    use tracing_subscriber::{fmt, prelude::*};
-
-    let default = "info,nodus=debug";
-    let make_filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        let dir = std::path::Path::new(&appdata).join("com.nodus.app").join("logs");
-        if std::fs::create_dir_all(&dir).is_ok() {
-            // Fixed filename (not date-suffixed) so the path is exactly
-            // `<dir>\nodus.log` — easy to find and share. It grows across runs;
-            // it's a diagnostic log the user can delete freely.
-            let (nb, guard) = tracing_appender::non_blocking(
-                tracing_appender::rolling::never(&dir, "nodus.log"),
-            );
-            tracing_subscriber::registry()
-                .with(make_filter())
-                .with(fmt::layer())
-                .with(fmt::layer().with_ansi(false).with_writer(nb))
-                .init();
-            info!("file log at {}\\nodus.log", dir.display());
-            return Some(guard);
-        }
-    }
-
-    // No %APPDATA% (non-Windows / dev) — stdout only.
-    tracing_subscriber::fmt().with_env_filter(make_filter()).init();
-    None
-}
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -127,8 +88,9 @@ fn build_tray() -> SystemTray {
 }
 
 fn main() {
-    // Keep the file-log flush guard alive for the whole process.
-    let _log_guard = init_logging();
+    // Rotating file log (t35). The module owns the flush guard and closes the file
+    // properly on a normal exit — see the RunEvent::Exit hook at the bottom.
+    nodus::logging::init(env!("CARGO_PKG_VERSION"));
 
     info!("Nodus starting up");
 
@@ -162,6 +124,7 @@ fn main() {
             nodus::bridge::rename_virtual_device,
             nodus::bridge::get_audio_health,
             nodus::bridge::reset_audio_health,
+            nodus::bridge::open_log_folder,
         ])
         .system_tray(build_tray())
         .on_system_tray_event(|app, event| match event {
@@ -267,6 +230,7 @@ fn main() {
             ));
             app.manage(nodus::bridge::SettingsState(settings.clone()));
             let cfg = settings.get();
+            nodus::logging::set_retention(cfg.log_retention_policy());
 
             nodus::bridge::setup_background_tasks(
                 handle.clone(),
@@ -322,6 +286,14 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Nodus");
+        .build(tauri::generate_context!())
+        .expect("error while building Nodus")
+        .run(|_app, event| {
+            // Tauri ends the process with `exit`, which skips destructors — so the log
+            // file is closed here, or every normal quit would read as a crash on the
+            // next launch. (t35)
+            if let tauri::RunEvent::Exit = event {
+                nodus::logging::finish();
+            }
+        });
 }

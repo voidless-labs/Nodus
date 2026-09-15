@@ -3,5 +3,6 @@ pub mod audio;
 pub mod bridge;
 pub mod daemon;
 pub mod detection;
+pub mod logging;
 pub mod routing;
 pub mod virtual_audio;

@@ -1165,14 +1165,19 @@ pub mod platform {
     const GLITCH_REPORT_EVERY: Duration = Duration::from_secs(5);
 
     /// A buffer arriving within this of the previous one means the stream is
-    /// flowing continuously — which is what makes an empty device buffer a genuine
-    /// underrun rather than ordinary silence between tracks. (t30)
+    /// flowing continuously. A longer gap is a pause (track ended, app paused), and
+    /// the silence that follows is nobody's dropout. (t30, t35)
     const GLITCH_FLOW_WINDOW: Duration = Duration::from_millis(200);
 
     /// Peak latency that makes a route worth mentioning in the log even when no
     /// glitch counter moved — a backlog climbing quietly is the t32 failure, and
     /// we want it visible before the user hears the lip-sync drift.
     const LATENCY_NOTICE_MS: u64 = 300;
+
+    /// Dropout per report window below which the figure is measurement noise: the
+    /// device consumes in ~10 ms periods, so a reading can sit up to one period off.
+    /// At or above this it is silence someone could hear — counted and logged. (t35)
+    const DROPOUT_NOTICE_MS: u64 = 10;
 
     // Wire codes for a render target's link state, shared via an AtomicU8 and
     // surfaced to the UI (a per-output-node status dot). Kept in sync with the
@@ -1415,10 +1420,24 @@ pub mod platform {
             // t30/L4: glitch accounting. The globals feed the UI/command; these
             // locals drive a periodic log line, so nodus.log records what the user's
             // ears heard, attributed to the device it happened on.
-            let mut buffers_written: u64 = 0;
-            let (mut lag_events, mut lagged_frames, mut underruns) = (0u64, 0u64, 0u64);
+            let (mut lag_events, mut lagged_frames) = (0u64, 0u64);
             let (mut shed_total, mut latency_peak) = (0u64, 0u64);
             let mut last_report = std::time::Instant::now();
+            // t35: a dropout is audio the device did NOT take from us while the stream
+            // was flowing — expected by wall clock minus actually consumed. The old
+            // test, "device buffer found empty at a write", fired ~12×/s on healthy
+            // streams: an empty buffer at that instant is usually refilled before the
+            // engine reads it, so it counted near-misses, not silence anyone heard.
+            let mut dropouts = crate::audio::glitch::DropoutMeter::new(format.sample_rate);
+            let stream_clock = std::time::Instant::now();
+            let mut frames_written: u64 = 0;
+            // Average buffer size, to turn "buffers queued in the channel" into time.
+            // Sizing them all by the last buffer overstated latency whenever that one
+            // buffer happened to be large. (t35)
+            let mut avg_buffer_frames: f64 = 0.0;
+            // Latency is logged when it crosses the threshold and when it recovers —
+            // a steady high latency is one fact, not 720 identical lines an hour.
+            let mut latency_high = false;
             // Buffer stashed by the lag handler: the live edge we resynced to. (t32)
             let mut pending: Option<AudioFrame> = None;
 
@@ -1426,24 +1445,35 @@ pub mod platform {
                 // Report only when something actually went wrong, at most once per
                 // window — a glitch storm must not become a log storm.
                 if last_report.elapsed() >= GLITCH_REPORT_EVERY {
-                    // Latency is reported even when nothing "broke": a backlog that
-                    // is quietly climbing is exactly the failure we want to see
-                    // before the user hears it as lip-sync drift. (t32)
-                    if lag_events > 0
-                        || underruns > 0
-                        || shed_total > 0
-                        || latency_peak >= LATENCY_NOTICE_MS
-                    {
+                    let window_s = last_report.elapsed().as_secs();
+                    let dropout_ms = dropouts.take_window_ms();
+                    let dropped_out = dropout_ms >= DROPOUT_NOTICE_MS;
+                    if dropped_out {
+                        crate::audio::glitch::record_dropout_ms(dropout_ms);
+                    }
+                    // Only real damage earns a line: a healthy stream stays silent.
+                    if dropped_out || lag_events > 0 || shed_total > 0 {
                         warn!(
-                            "audio health on {device_id}: {underruns} underruns, {lag_events} lag \
-                             events ({lagged_frames} buffers dropped), {shed_total} stale buffers \
-                             shed, peak latency {latency_peak} ms — in the last {}s",
-                            last_report.elapsed().as_secs()
+                            "audio dropout on {device_id}: {dropout_ms} ms not played, \
+                             {lag_events} lag events ({lagged_frames} buffers dropped), \
+                             {shed_total} stale buffers shed, peak latency {latency_peak} ms \
+                             — in the last {window_s}s"
                         );
+                    }
+                    // A backlog quietly climbing is the t32 failure: say when it starts
+                    // and when it ends, not every window in between.
+                    if latency_peak >= LATENCY_NOTICE_MS && !latency_high {
+                        latency_high = true;
+                        warn!(
+                            "latency on {device_id} rose to {latency_peak} ms \
+                             (notice level {LATENCY_NOTICE_MS} ms)"
+                        );
+                    } else if latency_peak < LATENCY_NOTICE_MS && latency_high {
+                        latency_high = false;
+                        warn!("latency on {device_id} back down to {latency_peak} ms");
                     }
                     lag_events = 0;
                     lagged_frames = 0;
-                    underruns = 0;
                     shed_total = 0;
                     latency_peak = 0;
                     last_report = std::time::Instant::now();
@@ -1459,6 +1489,11 @@ pub mod platform {
                         // refreshed below: a short gap means the stream is flowing,
                         // which is what distinguishes an underrun from real silence.
                         let gap = last_audio.elapsed();
+                        // The source went quiet for a while (track ended, app paused):
+                        // that silence is nobody's dropout, so close the segment. (t35)
+                        if gap >= GLITCH_FLOW_WINDOW {
+                            dropouts.pause();
+                        }
                         let is_muted = muted.load(Ordering::Relaxed);
 
                         // Mute goes BEFORE the FX chain, not after it.
@@ -1531,19 +1566,6 @@ pub mod platform {
                         let mut written = 0usize;
                         while written < total_frames && !stop_flag.load(Ordering::SeqCst) {
                             let padding = client.GetCurrentPadding().unwrap_or(0);
-                            // t30/L4: the device buffer ran dry while audio was still
-                            // flowing — WASAPI padded the gap with silence, and that
-                            // is the crackle. Count once per buffer; never on the very
-                            // first write (padding is legitimately 0 then) nor after a
-                            // genuine silence gap.
-                            if written == 0
-                                && padding == 0
-                                && buffers_written > 0
-                                && gap < GLITCH_FLOW_WINDOW
-                            {
-                                underruns += 1;
-                                crate::audio::glitch::record_underrun();
-                            }
                             let available = buf_frames.saturating_sub(padding) as usize;
                             if available == 0 {
                                 std::thread::sleep(Duration::from_millis(1));
@@ -1562,20 +1584,35 @@ pub mod platform {
                                 .ReleaseBuffer(n as u32, 0)
                                 .map_err(|e| SessionError::Wasapi(WasapiError::Buffer(e.to_string())))?;
                             written += n;
+                            frames_written += n as u64;
                         }
-                        buffers_written += 1;
                         crate::audio::glitch::record_buffer();
 
                         // How much audio is still ahead of the listener: what the
                         // device holds plus what waits in the channel. The channel
-                        // part is an estimate — it counts buffers, sized by the one
-                        // just played. This is the number that climbs into the
-                        // seconds when the ratchet bites. (t32)
+                        // part is an estimate — it counts buffers, sized by the recent
+                        // average buffer. This is the number that climbs into the
+                        // seconds when the ratchet bites. (t32, t35)
                         let sr = format.sample_rate.max(1) as u64;
-                        let device_ms =
-                            client.GetCurrentPadding().unwrap_or(0) as u64 * 1000 / sr;
-                        let buffer_ms = total_frames as u64 * 1000 / sr;
-                        let latency_ms = device_ms + source.len() as u64 * buffer_ms;
+                        // Buffer first, clock second: if the thread is preempted between
+                        // the two reads, the sample errs toward MORE deficit, which the
+                        // meter's floor discards. The other order would err low and
+                        // could hide a real dropout. (t35)
+                        let padding_now = client.GetCurrentPadding().unwrap_or(0) as u64;
+                        dropouts.sample(
+                            stream_clock.elapsed().as_secs_f64(),
+                            frames_written.saturating_sub(padding_now),
+                            true,
+                        );
+                        avg_buffer_frames = if avg_buffer_frames == 0.0 {
+                            total_frames as f64
+                        } else {
+                            avg_buffer_frames * 0.9 + total_frames as f64 * 0.1
+                        };
+                        let device_ms = padding_now * 1000 / sr;
+                        let queued_ms =
+                            (source.len() as f64 * avg_buffer_frames * 1000.0 / sr as f64) as u64;
+                        let latency_ms = device_ms + queued_ms;
                         latency_peak = latency_peak.max(latency_ms);
                         crate::audio::glitch::record_latency(latency_ms);
                     }
@@ -1588,6 +1625,18 @@ pub mod platform {
                         if last_audio.elapsed() > Duration::from_millis(40) {
                             let prev = f32::from_bits(level.load(Ordering::Relaxed));
                             level.store(if prev > 0.001 { (prev * 0.9).to_bits() } else { 0 }, Ordering::Relaxed);
+                        }
+                        // t35: keep measuring while waiting. Sampled only when buffers
+                        // arrive, the meter locked onto their rhythm and read a slowly
+                        // drifting gulp as a steady trickle of dropouts. Only while the
+                        // stream still counts as flowing — a longer wait is a pause.
+                        if frames_written > 0 && last_audio.elapsed() < GLITCH_FLOW_WINDOW {
+                            let padding_now = client.GetCurrentPadding().unwrap_or(0) as u64;
+                            dropouts.sample(
+                                stream_clock.elapsed().as_secs_f64(),
+                                frames_written.saturating_sub(padding_now),
+                                false,
+                            );
                         }
                         std::thread::sleep(Duration::from_millis(1));
                     }

@@ -19,7 +19,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::graph::{ActiveRoute, Graph, HubTap, RoutingGraph};
 use super::node::{FxSpec, NodeId, RouteId};
@@ -619,6 +619,18 @@ impl RoutingEngine {
             self.wire_route(ar, &mut captures, &mut routes)?;
         }
 
+        // One line per app that isn't running yet, once per apply. The retry loop
+        // stays silent until it succeeds (and then says so), so an app left closed
+        // all day costs one line instead of thousands. Deduplicated by exe: a Mixer
+        // fed by one app defers several routes for the same program. (t35)
+        let deferred: std::collections::BTreeSet<String> = lock_recover(&self.pending)
+            .iter()
+            .filter_map(|ar| ar.exe_name.clone())
+            .collect();
+        for exe in deferred {
+            warn!("route for '{exe}' deferred — app not running; will retry until it appears");
+        }
+
         Ok(())
     }
 
@@ -662,13 +674,16 @@ impl RoutingEngine {
                     Err(e) => {
                         // App not running at all. Defer instead of dropping: the graph
                         // still asks for this route, and the app may start at any moment
-                        // (autostart after a boot, or the user just opening it). `warn!`
-                        // rather than `debug!` — silently doing nothing is exactly what
-                        // made this undiagnosable from the log. (t31)
-                        warn!(
-                            "route for '{exe}' deferred — app not running ({e}); \
-                             will retry until it appears"
-                        );
+                        // (autostart after a boot, or the user just opening it). (t31)
+                        //
+                        // Deliberately NOT a warn! here. This branch also runs on every
+                        // retry — every 2 s for as long as the app stays closed — and a
+                        // warn! here wrote ~1800 identical lines an hour per absent app,
+                        // which became most of nodus.log within days (t35).
+                        // `start_internal` reports each deferred app once per apply and
+                        // the retry loop announces the pickup, so the log stays both
+                        // readable and diagnosable.
+                        trace!("route for '{exe}' still deferred ({e})");
                         lock_recover(&self.pending).push(ar.clone());
                         return Ok(());
                     }

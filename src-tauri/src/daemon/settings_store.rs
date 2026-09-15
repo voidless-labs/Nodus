@@ -50,6 +50,16 @@ pub struct Settings {
     /// Node card style: "primary" (New Primary, default) | "glass" | "legacy".
     /// Drives `data-node-style` on the document root (frontend, live).
     pub node_style: String,
+
+    // ── Diagnostics (applied live) ─────────────────────────────────────────
+    /// How old log files are pruned: "files" keeps the newest `log_max_files` (the
+    /// one being written included), "size" keeps the whole log folder under
+    /// `log_max_mb`. The file being written is never deleted. (t35)
+    pub log_retention: String,
+    /// Files to keep in "files" mode.
+    pub log_max_files: u32,
+    /// Folder limit, MB, in "size" mode (never below one full file).
+    pub log_max_mb: u32,
 }
 
 impl Default for Settings {
@@ -65,6 +75,9 @@ impl Default for Settings {
             start_with_windows: false,
             accent: "#F5C542".into(),
             node_style: "primary".into(),
+            log_retention: "files".into(),
+            log_max_files: crate::logging::DEFAULT_MAX_FILES,
+            log_max_mb: crate::logging::DEFAULT_MAX_MB,
         }
     }
 }
@@ -78,6 +91,13 @@ impl Settings {
     /// Process-scan interval (clamped).
     pub fn scan_interval(&self) -> Duration {
         Duration::from_secs(self.process_scan_secs.clamp(1, 30) as u64)
+    }
+    /// Log pruning policy from the diagnostics settings. (t35)
+    pub fn log_retention_policy(&self) -> crate::logging::Retention {
+        match self.log_retention.as_str() {
+            "size" => crate::logging::Retention::Megabytes(self.log_max_mb),
+            _ => crate::logging::Retention::Files(self.log_max_files),
+        }
     }
 }
 
@@ -116,6 +136,9 @@ impl SettingsStore {
         }
         if prev.start_with_windows != next.start_with_windows {
             apply_autostart(next.start_with_windows);
+        }
+        if prev.log_retention_policy() != next.log_retention_policy() {
+            crate::logging::set_retention(next.log_retention_policy());
         }
         if let Some(p) = &self.path {
             if let Err(e) = persist(p, &next) {
@@ -197,6 +220,7 @@ mod tests {
         assert_eq!(s.scan_interval(), Duration::from_secs(2));
         assert!(!s.server_lan);
         assert!(s.close_to_tray);
+        assert_eq!(s.log_retention_policy(), crate::logging::Retention::Files(5));
     }
 
     #[test]

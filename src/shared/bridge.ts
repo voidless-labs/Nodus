@@ -461,6 +461,12 @@ export async function openExternal(url: string): Promise<void> {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+/** Open the folder with Nodus log files in Explorer (t35). No-op without Tauri. */
+export async function openLogFolder(): Promise<void> {
+  if (!isTauri) return;
+  await call<void>('open_log_folder');
+}
+
 // ── Scene sync (t17 phase B) ─────────────────────────────────────────────────
 // The workspace document `{ tabs, activeId }` lives in the daemon as the single
 // source of truth. A client pushes the whole document after a local mutation;
@@ -507,9 +513,17 @@ export interface Settings {
   accent: string;
   /** Node card style: 'primary' (New Primary) | 'glass' | 'legacy'. */
   node_style: NodeStyle;
+  // diagnostics (live) — t35
+  /** How old log files are pruned: 'files' keeps the newest N, 'size' caps the folder. */
+  log_retention: LogRetention;
+  /** Files to keep in 'files' mode, the one being written included. */
+  log_max_files: number;
+  /** Log folder limit, MB, in 'size' mode. */
+  log_max_mb: number;
 }
 
 export type NodeStyle = 'primary' | 'glass' | 'legacy';
+export type LogRetention = 'files' | 'size';
 
 /** Defaults mirroring Rust `Settings::default()` — used before hydrate / offline. */
 export const DEFAULT_SETTINGS: Settings = {
@@ -523,6 +537,9 @@ export const DEFAULT_SETTINGS: Settings = {
   start_with_windows: false,
   accent: '#F5C542',
   node_style: 'primary',
+  log_retention: 'files',
+  log_max_files: 5,
+  log_max_mb: 50,
 };
 
 export async function getSettings(): Promise<Settings | null> {
